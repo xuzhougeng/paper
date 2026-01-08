@@ -119,6 +119,8 @@ Platform aliases: `google_scholar` → `scholar`, `web_of_science` / `world_of_k
 
 ## How it works
 
+![How PaperCLI Works](assets/workflow.png)
+
 1. **Query Intent Extraction**: LLM analyzes your query to extract keywords, synonyms, and search intent
 2. **Multi-source Search**: Searches PubMed, OpenAlex, Scholar, and optionally arXiv in parallel
 3. **Deduplication**: Removes duplicate papers using DOI, source IDs, and normalized titles
