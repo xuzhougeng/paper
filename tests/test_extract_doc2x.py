@@ -10,7 +10,12 @@ from httpx import Response
 
 from papercli.doc2x import Doc2XClient, Doc2XError
 from papercli.extract import (
+    collect_all_image_urls,
     extract_page_text,
+    find_image_urls,
+    generate_image_filename,
+    replace_image_urls,
+    replace_urls_in_result,
     result_to_jsonl,
     result_to_page_records,
 )
@@ -483,4 +488,151 @@ class TestDoc2XError:
         )
         error_str = str(error)
         assert "password protected" in error_str
+
+
+# =============================================================================
+# Image URL Tests
+# =============================================================================
+
+
+class TestFindImageUrls:
+    """Tests for find_image_urls function."""
+
+    def test_find_single_url(self):
+        """Test finding a single image URL."""
+        text = 'Some text <img src="https://cdn.noedgeai.com/abc-123_0.jpg?x=10&y=20"/> more text'
+        urls = find_image_urls(text)
+        assert len(urls) == 1
+        assert "cdn.noedgeai.com" in urls[0]
+
+    def test_find_multiple_urls(self):
+        """Test finding multiple image URLs."""
+        text = '''
+        <img src="https://cdn.noedgeai.com/abc-123_0.jpg?x=10"/>
+        <img src="https://cdn.noedgeai.com/abc-123_1.png?y=20"/>
+        '''
+        urls = find_image_urls(text)
+        assert len(urls) == 2
+
+    def test_find_no_urls(self):
+        """Test with no image URLs."""
+        text = "Just some plain text without images"
+        urls = find_image_urls(text)
+        assert urls == []
+
+    def test_deduplicate_urls(self):
+        """Test that duplicate URLs are removed."""
+        text = '''
+        <img src="https://cdn.noedgeai.com/abc-123_0.jpg?x=10"/>
+        <img src="https://cdn.noedgeai.com/abc-123_0.jpg?x=10"/>
+        '''
+        urls = find_image_urls(text)
+        assert len(urls) == 1
+
+
+class TestGenerateImageFilename:
+    """Tests for generate_image_filename function."""
+
+    def test_standard_doc2x_url(self):
+        """Test filename generation for standard Doc2X URL."""
+        url = "https://cdn.noedgeai.com/019b9d84-fe68-773d-9652-7f7dbdb9cc5d_5.jpg?x=10&y=20"
+        filename = generate_image_filename(url, "test-uid")
+        assert filename == "019b9d84-fe68-773d-9652-7f7dbdb9cc5d_p5.jpg"
+
+    def test_different_extensions(self):
+        """Test filename preserves extension."""
+        url = "https://cdn.noedgeai.com/abc-123_10.png?x=10"
+        filename = generate_image_filename(url, "test-uid")
+        assert filename.endswith(".png")
+        assert "_p10." in filename
+
+
+class TestReplaceImageUrls:
+    """Tests for replace_image_urls function."""
+
+    def test_replace_single_url(self):
+        """Test replacing a single URL."""
+        text = '<img src="https://cdn.noedgeai.com/abc_0.jpg"/>'
+        mapping = {"https://cdn.noedgeai.com/abc_0.jpg": "/images/abc_p0.jpg"}
+        result = replace_image_urls(text, mapping)
+        assert "/images/abc_p0.jpg" in result
+        assert "cdn.noedgeai.com" not in result
+
+    def test_replace_multiple_urls(self):
+        """Test replacing multiple URLs."""
+        text = '''
+        <img src="https://cdn.noedgeai.com/abc_0.jpg"/>
+        <img src="https://cdn.noedgeai.com/abc_1.jpg"/>
+        '''
+        mapping = {
+            "https://cdn.noedgeai.com/abc_0.jpg": "/img/abc_p0.jpg",
+            "https://cdn.noedgeai.com/abc_1.jpg": "/img/abc_p1.jpg",
+        }
+        result = replace_image_urls(text, mapping)
+        assert "/img/abc_p0.jpg" in result
+        assert "/img/abc_p1.jpg" in result
+        assert "cdn.noedgeai.com" not in result
+
+
+class TestCollectAllImageUrls:
+    """Tests for collect_all_image_urls function."""
+
+    def test_collect_from_pages(self):
+        """Test collecting URLs from pages array."""
+        result = {
+            "pages": [
+                {"md": '<img src="https://cdn.noedgeai.com/019b9d84-fe68-773d-9652-7f7dbdb9cc5d_0.jpg?x=10"/>'},
+                {"md": '<img src="https://cdn.noedgeai.com/019b9d84-fe68-773d-9652-7f7dbdb9cc5d_1.jpg?y=20"/>'},
+            ]
+        }
+        urls = collect_all_image_urls(result)
+        assert len(urls) == 2
+
+    def test_collect_from_list(self):
+        """Test collecting URLs from list result."""
+        result = [
+            {"text": '<img src="https://cdn.noedgeai.com/019b9d84-fe68-773d-9652-7f7dbdb9cc5d_0.jpg?x=10"/>'},
+            {"text": '<img src="https://cdn.noedgeai.com/019b9d84-fe68-773d-9652-7f7dbdb9cc5d_1.jpg?y=20"/>'},
+        ]
+        urls = collect_all_image_urls(result)
+        assert len(urls) == 2
+
+    def test_deduplicate_across_pages(self):
+        """Test deduplication across pages."""
+        result = {
+            "pages": [
+                {"md": '<img src="https://cdn.noedgeai.com/019b9d84-fe68-773d-9652-7f7dbdb9cc5d_0.jpg?x=10"/>'},
+                {"md": '<img src="https://cdn.noedgeai.com/019b9d84-fe68-773d-9652-7f7dbdb9cc5d_0.jpg?x=10"/>'},
+            ]
+        }
+        urls = collect_all_image_urls(result)
+        assert len(urls) == 1
+
+
+class TestReplaceUrlsInResult:
+    """Tests for replace_urls_in_result function."""
+
+    def test_replace_in_pages(self):
+        """Test URL replacement in pages array."""
+        result = {
+            "pages": [
+                {"md": '<img src="https://cdn.noedgeai.com/uid_0.jpg"/>'},
+            ]
+        }
+        mapping = {"https://cdn.noedgeai.com/uid_0.jpg": "/local/uid_p0.jpg"}
+        new_result = replace_urls_in_result(result, mapping)
+        assert "/local/uid_p0.jpg" in new_result["pages"][0]["md"]
+
+    def test_replace_in_text_field(self):
+        """Test URL replacement in text field."""
+        result = {"text": '<img src="https://cdn.noedgeai.com/uid_0.jpg"/>'}
+        mapping = {"https://cdn.noedgeai.com/uid_0.jpg": "/local/uid_p0.jpg"}
+        new_result = replace_urls_in_result(result, mapping)
+        assert "/local/uid_p0.jpg" in new_result["text"]
+
+    def test_empty_mapping(self):
+        """Test with empty mapping returns original."""
+        result = {"md": "some content"}
+        new_result = replace_urls_in_result(result, {})
+        assert new_result == result
 

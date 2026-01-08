@@ -538,6 +538,10 @@ def extract(
         Optional[str],
         typer.Option("--out", "-o", help="Output file path (default: stdout)"),
     ] = None,
+    image_dir: Annotated[
+        Optional[str],
+        typer.Option("--image-dir", "-i", help="Directory to download images (replaces CDN URLs with local paths)"),
+    ] = None,
     poll_interval: Annotated[
         float,
         typer.Option("--poll-interval", help="Seconds between status polls"),
@@ -575,6 +579,7 @@ def extract(
     Examples:
         paper extract paper.pdf
         paper extract paper.pdf --out result.jsonl
+        paper extract paper.pdf --image-dir ./images --out result.jsonl
         paper extract paper.pdf --include-raw --verbose
     """
     import asyncio
@@ -607,6 +612,7 @@ def extract(
             _run_extract(
                 pdf_path=pdf,
                 out=out,
+                image_dir=image_dir,
                 poll_interval=poll_interval,
                 timeout=timeout,
                 include_raw=include_raw,
@@ -716,6 +722,7 @@ def structure(
 async def _run_extract(
     pdf_path: "Path",
     out: str | None,
+    image_dir: str | None,
     poll_interval: float,
     timeout: float,
     include_raw: bool,
@@ -730,7 +737,13 @@ async def _run_extract(
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
     from papercli.doc2x import Doc2XClient, Doc2XError
-    from papercli.extract import result_to_jsonl, write_jsonl
+    from papercli.extract import (
+        result_to_jsonl,
+        write_jsonl,
+        collect_all_image_urls,
+        download_images,
+        replace_urls_in_result,
+    )
 
     show_progress = not quiet
     client = Doc2XClient(settings)
@@ -739,6 +752,8 @@ async def _run_extract(
         if verbose and show_progress:
             console.print(f"[dim]Doc2X Base URL: {settings.doc2x.base_url}[/dim]")
             console.print(f"[dim]PDF: {pdf_path}[/dim]")
+            if image_dir:
+                console.print(f"[dim]Image directory: {image_dir}[/dim]")
             console.print()
 
         # Progress tracking
@@ -781,7 +796,35 @@ async def _run_extract(
             )
             progress.update(parse_task, completed=100, description="[green]✓ PDF parsed")
 
-        # Step 3: Convert to JSONL
+            # Step 3: Download images if requested
+            url_mapping: dict[str, str] = {}
+            if image_dir:
+                image_urls = collect_all_image_urls(result)
+                if image_urls:
+                    img_task = progress.add_task(
+                        f"[cyan]Downloading {len(image_urls)} image(s)...",
+                        total=len(image_urls),
+                    )
+
+                    def update_img_progress(downloaded: int, total: int) -> None:
+                        progress.update(img_task, completed=downloaded)
+
+                    url_mapping = await download_images(
+                        urls=image_urls,
+                        image_dir=Path(image_dir),
+                        uid=uid,
+                        on_progress=update_img_progress,
+                    )
+                    progress.update(
+                        img_task,
+                        completed=len(image_urls),
+                        description=f"[green]✓ Downloaded {len(url_mapping)}/{len(image_urls)} image(s)",
+                    )
+
+                    # Replace URLs in result
+                    result = replace_urls_in_result(result, url_mapping)
+
+        # Step 4: Convert to JSONL
         source_path_str = str(pdf_path.resolve())
 
         if out:
