@@ -36,10 +36,12 @@ export SERPAPI_API_KEY="your-serpapi-key"
 
 # Optional: Custom LLM endpoint (OpenAI-compatible)
 export LLM_BASE_URL="https://api.openai.com/v1"
+# Or use OPENAI_BASE_URL (same effect)
+export OPENAI_BASE_URL="https://api.openai.com/v1"
 
-# Optional: Model configuration
-export PAPERCLI_INTENT_MODEL="gpt-4o-mini"
-export PAPERCLI_EVAL_MODEL="gpt-4o"
+# Optional: Model configuration (defaults shown)
+export PAPERCLI_INTENT_MODEL="gpt-4o-mini"  # Default: gpt-4o-mini
+export PAPERCLI_EVAL_MODEL="gpt-4o"          # Default: gpt-4o
 ```
 
 Or create a `~/.papercli.toml` configuration file:
@@ -47,8 +49,8 @@ Or create a `~/.papercli.toml` configuration file:
 ```toml
 [llm]
 base_url = "https://api.openai.com/v1"
-intent_model = "gpt-4o-mini"
-eval_model = "gpt-4o"
+intent_model = "gpt-4o-mini"  # Default: gpt-4o-mini (for query rewriting)
+eval_model = "gpt-4o"          # Default: gpt-4o (for paper evaluation)
 
 [cache]
 path = "~/.cache/papercli.sqlite"
