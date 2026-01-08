@@ -138,6 +138,213 @@ def find(
         raise typer.Exit(1)
 
 
+@app.command()
+def check(
+    sources: Annotated[
+        str,
+        typer.Option("--sources", "-s", help="Comma-separated list of sources to check: pubmed,openalex,scholar,arxiv"),
+    ] = "pubmed,openalex,arxiv",
+    intent_model: Annotated[
+        Optional[str],
+        typer.Option("--intent-model", help="Model for query rewriting/intent extraction"),
+    ] = None,
+    eval_model: Annotated[
+        Optional[str],
+        typer.Option("--eval-model", help="Model for evaluation/reranking"),
+    ] = None,
+    llm_base_url: Annotated[
+        Optional[str],
+        typer.Option("--llm-base-url", help="Base URL for OpenAI-compatible API"),
+    ] = None,
+) -> None:
+    """
+    Check if LLM and search APIs are working properly.
+
+    Example:
+        paper check
+        paper check --sources pubmed,openalex
+    """
+    import asyncio
+    from papercli.config import Settings
+
+    settings = Settings(
+        intent_model=intent_model,
+        eval_model=eval_model,
+        llm_base_url=llm_base_url,
+    )
+
+    # Parse sources
+    source_list = [s.strip().lower() for s in sources.split(",") if s.strip()]
+
+    asyncio.run(_run_checks(settings, source_list))
+
+
+async def _run_checks(settings: "Settings", sources: list[str]) -> None:
+    """Run all API checks."""
+    import time
+    import httpx
+    from rich.table import Table
+
+    console.print("\n[bold cyan]🔍 PaperCLI API Health Check[/bold cyan]\n")
+
+    # Display configuration
+    console.print("[dim]Configuration:[/dim]")
+    console.print(f"  Intent Model: [cyan]{settings.get_intent_model()}[/cyan]")
+    console.print(f"  Eval Model:   [cyan]{settings.get_eval_model()}[/cyan]")
+    console.print(f"  LLM Base URL: [cyan]{settings.llm.base_url}[/cyan]")
+    console.print()
+
+    results = []
+
+    # Check LLM API
+    console.print("[bold]Checking LLM API...[/bold]")
+    llm_ok, llm_msg, llm_time = await _check_llm(settings)
+    results.append(("LLM (Intent)", settings.get_intent_model(), llm_ok, llm_msg, llm_time))
+
+    # Check search sources
+    console.print("[bold]Checking Search APIs...[/bold]")
+
+    if "pubmed" in sources:
+        ok, msg, t = await _check_pubmed()
+        results.append(("PubMed", "NCBI E-utilities", ok, msg, t))
+
+    if "openalex" in sources:
+        ok, msg, t = await _check_openalex()
+        results.append(("OpenAlex", "api.openalex.org", ok, msg, t))
+
+    if "arxiv" in sources:
+        ok, msg, t = await _check_arxiv()
+        results.append(("arXiv", "export.arxiv.org", ok, msg, t))
+
+    if "scholar" in sources:
+        ok, msg, t = await _check_scholar(settings)
+        results.append(("Google Scholar", "SerpAPI", ok, msg, t))
+
+    # Display results table
+    console.print()
+    table = Table(title="API Status", show_header=True, header_style="bold")
+    table.add_column("Service", style="cyan")
+    table.add_column("Endpoint", style="dim")
+    table.add_column("Status")
+    table.add_column("Message")
+    table.add_column("Time", justify="right")
+
+    all_ok = True
+    for service, endpoint, ok, msg, t in results:
+        status = "[green]✓ OK[/green]" if ok else "[red]✗ FAIL[/red]"
+        if not ok:
+            all_ok = False
+        time_str = f"{t:.0f}ms" if t else "-"
+        table.add_row(service, endpoint, status, msg, time_str)
+
+    console.print(table)
+    console.print()
+
+    if all_ok:
+        console.print("[bold green]✓ All checks passed![/bold green]")
+    else:
+        console.print("[bold yellow]⚠ Some checks failed. Please review the configuration.[/bold yellow]")
+
+
+async def _check_llm(settings: "Settings") -> tuple[bool, str, float | None]:
+    """Check LLM API connectivity."""
+    import time
+    try:
+        from papercli.llm import LLMClient
+        llm = LLMClient(settings)
+        start = time.time()
+        response = await llm.complete(
+            prompt="Say 'OK' if you can read this.",
+            model=settings.get_intent_model(),
+            max_tokens=10,
+        )
+        elapsed = (time.time() - start) * 1000
+        if response:
+            return True, "Connected", elapsed
+        return False, "Empty response", elapsed
+    except Exception as e:
+        error_msg = str(e)[:50]
+        return False, error_msg, None
+
+
+async def _check_pubmed() -> tuple[bool, str, float | None]:
+    """Check PubMed API connectivity."""
+    import time
+    import httpx
+    try:
+        start = time.time()
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/einfo.fcgi?db=pubmed&retmode=json"
+            response = await client.get(url)
+            response.raise_for_status()
+        elapsed = (time.time() - start) * 1000
+        return True, "Connected", elapsed
+    except httpx.TimeoutException:
+        return False, "Connection timeout", None
+    except httpx.ConnectError as e:
+        return False, "Cannot connect to server", None
+    except Exception as e:
+        error_msg = str(e)[:50] if str(e) else "Connection failed"
+        return False, error_msg, None
+
+
+async def _check_openalex() -> tuple[bool, str, float | None]:
+    """Check OpenAlex API connectivity."""
+    import time
+    import httpx
+    try:
+        start = time.time()
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            url = "https://api.openalex.org/works?per_page=1"
+            response = await client.get(url)
+            response.raise_for_status()
+        elapsed = (time.time() - start) * 1000
+        return True, "Connected", elapsed
+    except Exception as e:
+        error_msg = str(e)[:50] if str(e) else "Connection failed"
+        return False, error_msg, None
+
+
+async def _check_arxiv() -> tuple[bool, str, float | None]:
+    """Check arXiv API connectivity."""
+    import time
+    import httpx
+    try:
+        start = time.time()
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            # Use HTTPS directly to avoid redirect
+            url = "https://export.arxiv.org/api/query?search_query=all:test&max_results=1"
+            response = await client.get(url)
+            response.raise_for_status()
+        elapsed = (time.time() - start) * 1000
+        return True, "Connected", elapsed
+    except Exception as e:
+        error_msg = str(e)[:50] if str(e) else "Connection failed"
+        return False, error_msg, None
+
+
+async def _check_scholar(settings: "Settings") -> tuple[bool, str, float | None]:
+    """Check Google Scholar (SerpAPI) connectivity."""
+    import os
+    api_key = settings.get_serpapi_key() or os.environ.get("SERPAPI_API_KEY")
+    if not api_key:
+        return False, "SERPAPI_API_KEY not configured", None
+
+    import time
+    import httpx
+    try:
+        start = time.time()
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            url = f"https://serpapi.com/account?api_key={api_key}"
+            response = await client.get(url)
+            response.raise_for_status()
+        elapsed = (time.time() - start) * 1000
+        return True, "Connected", elapsed
+    except Exception as e:
+        error_msg = str(e)[:50] if str(e) else "Connection failed"
+        return False, error_msg, None
+
+
 if __name__ == "__main__":
     app()
 
