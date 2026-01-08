@@ -531,6 +531,191 @@ async def _run_gen_query(
     return result
 
 
+@app.command()
+def extract(
+    pdf_path: Annotated[str, typer.Argument(help="Path to the PDF file to extract")],
+    out: Annotated[
+        Optional[str],
+        typer.Option("--out", "-o", help="Output file path (default: stdout)"),
+    ] = None,
+    poll_interval: Annotated[
+        float,
+        typer.Option("--poll-interval", help="Seconds between status polls"),
+    ] = 2.0,
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Maximum wait time in seconds"),
+    ] = 900.0,
+    include_raw: Annotated[
+        bool,
+        typer.Option("--include-raw/--no-include-raw", help="Include raw page data in output"),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
+) -> None:
+    """
+    Extract text from a PDF using Doc2X and output as JSONL.
+
+    Each line in the output is a JSON object representing one page with fields:
+    - doc2x_uid: The Doc2X task ID
+    - source_path: Original PDF file path
+    - page_index: 0-based page index
+    - page_no: 1-based page number
+    - text: Extracted text content
+    - raw_page: (optional) Raw page data if --include-raw is set
+
+    Requires DOC2X_API_KEY environment variable or [doc2x] section in config.
+
+    Examples:
+        paper extract paper.pdf
+        paper extract paper.pdf --out result.jsonl
+        paper extract paper.pdf --include-raw --verbose
+    """
+    import asyncio
+    from pathlib import Path
+
+    from papercli.config import Settings
+
+    pdf = Path(pdf_path)
+    if not pdf.exists():
+        console.print(f"[red]Error:[/red] PDF file not found: {pdf_path}")
+        raise typer.Exit(1)
+
+    if not pdf.suffix.lower() == ".pdf":
+        console.print(f"[red]Error:[/red] File does not have .pdf extension: {pdf_path}")
+        raise typer.Exit(1)
+
+    # Build settings
+    settings = Settings()
+
+    # Validate Doc2X API key early
+    try:
+        settings.get_doc2x_api_key()
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    # Run the extraction
+    try:
+        asyncio.run(
+            _run_extract(
+                pdf_path=pdf,
+                out=out,
+                poll_interval=poll_interval,
+                timeout=timeout,
+                include_raw=include_raw,
+                settings=settings,
+                verbose=verbose,
+                quiet=quiet,
+            )
+        )
+    except Exception as e:
+        if verbose:
+            console.print_exception()
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+async def _run_extract(
+    pdf_path: "Path",
+    out: str | None,
+    poll_interval: float,
+    timeout: float,
+    include_raw: bool,
+    settings: "Settings",
+    verbose: bool = False,
+    quiet: bool = False,
+) -> None:
+    """Run the PDF extraction workflow."""
+    from pathlib import Path  # noqa: F811
+    import sys  # noqa: F401
+
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+
+    from papercli.doc2x import Doc2XClient, Doc2XError
+    from papercli.extract import result_to_jsonl, write_jsonl
+
+    show_progress = not quiet
+    client = Doc2XClient(settings)
+
+    try:
+        if verbose and show_progress:
+            console.print(f"[dim]Doc2X Base URL: {settings.doc2x.base_url}[/dim]")
+            console.print(f"[dim]PDF: {pdf_path}[/dim]")
+            console.print()
+
+        # Progress tracking
+        current_progress = 0
+
+        def on_progress(progress: int) -> None:
+            nonlocal current_progress
+            current_progress = progress
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            disable=not show_progress,
+            transient=True,
+        ) as progress:
+            # Step 1: Upload
+            upload_task = progress.add_task("[cyan]Uploading PDF to Doc2X...", total=None)
+
+            uid, upload_url = await client.preupload()
+            if verbose and show_progress:
+                console.print(f"[dim]Task UID: {uid}[/dim]")
+
+            await client.upload_pdf(upload_url, pdf_path)
+            progress.update(upload_task, description="[green]✓ PDF uploaded")
+
+            # Step 2: Parse (with progress bar)
+            parse_task = progress.add_task("[cyan]Parsing PDF...", total=100)
+
+            def update_parse_progress(p: int) -> None:
+                progress.update(parse_task, completed=p)
+
+            result = await client.poll_until_complete(
+                uid=uid,
+                poll_interval=poll_interval,
+                max_wait=timeout,
+                on_progress=update_parse_progress,
+            )
+            progress.update(parse_task, completed=100, description="[green]✓ PDF parsed")
+
+        # Step 3: Convert to JSONL
+        source_path_str = str(pdf_path.resolve())
+
+        if out:
+            # Write to file
+            out_path = Path(out)
+            count = write_jsonl(result, uid, source_path_str, str(out_path), include_raw)
+            if show_progress:
+                console.print(f"[green]✓ Wrote {count} page(s) to {out_path}[/green]")
+        else:
+            # Write to stdout
+            jsonl_output = result_to_jsonl(result, uid, source_path_str, include_raw)
+            # Use sys.stdout directly to avoid Rich formatting
+            import sys
+            sys.stdout.write(jsonl_output)
+            if jsonl_output and not jsonl_output.endswith("\n"):
+                sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    except Doc2XError as e:
+        raise RuntimeError(str(e)) from e
+    finally:
+        await client.close()
+
+
 if __name__ == "__main__":
     app()
 

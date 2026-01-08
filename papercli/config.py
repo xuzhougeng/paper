@@ -27,6 +27,16 @@ class CacheConfig(BaseModel):
     ttl_hours: int = Field(default=24 * 7)  # 1 week default
 
 
+class Doc2XConfig(BaseModel):
+    """Doc2X PDF parsing service configuration."""
+
+    base_url: str = Field(default="https://v2.doc2x.noedgeai.com")
+    api_key: Optional[str] = Field(default=None)
+    timeout: float = Field(default=60.0)  # HTTP request timeout
+    poll_interval: float = Field(default=2.0)  # Polling interval in seconds
+    max_wait: float = Field(default=900.0)  # Max wait time (15 min default)
+
+
 class APIKeysConfig(BaseModel):
     """API keys configuration."""
 
@@ -41,6 +51,7 @@ class Settings(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     api_keys: APIKeysConfig = Field(default_factory=APIKeysConfig)
+    doc2x: Doc2XConfig = Field(default_factory=Doc2XConfig)
 
     # CLI overrides (set directly from command line)
     intent_model: Optional[str] = Field(default=None)
@@ -82,6 +93,12 @@ class Settings(BaseModel):
         # Cache path
         if cache_path := os.environ.get("PAPERCLI_CACHE_PATH"):
             self.cache.path = cache_path
+
+        # Doc2X configuration
+        if doc2x_api_key := os.environ.get("DOC2X_API_KEY"):
+            self.doc2x.api_key = doc2x_api_key
+        if doc2x_base_url := os.environ.get("DOC2X_BASE_URL"):
+            self.doc2x.base_url = doc2x_base_url
 
     def _load_from_config_file(self) -> None:
         """Load configuration from config file (~/.papercli.toml)."""
@@ -130,6 +147,18 @@ class Settings(BaseModel):
             if "openalex_email" in api_keys and not self.api_keys.openalex_email:
                 self.api_keys.openalex_email = api_keys["openalex_email"]
 
+        if doc2x_config := config_data.get("doc2x"):
+            if "api_key" in doc2x_config and not self.doc2x.api_key:
+                self.doc2x.api_key = doc2x_config["api_key"]
+            if "base_url" in doc2x_config:
+                self.doc2x.base_url = doc2x_config["base_url"]
+            if "timeout" in doc2x_config:
+                self.doc2x.timeout = doc2x_config["timeout"]
+            if "poll_interval" in doc2x_config:
+                self.doc2x.poll_interval = doc2x_config["poll_interval"]
+            if "max_wait" in doc2x_config:
+                self.doc2x.max_wait = doc2x_config["max_wait"]
+
     def _apply_cli_overrides(self) -> None:
         """Apply CLI-provided overrides."""
         if self.intent_model:
@@ -167,4 +196,13 @@ class Settings(BaseModel):
     def get_serpapi_key(self) -> Optional[str]:
         """Get SerpAPI key (optional)."""
         return self.api_keys.serpapi_key
+
+    def get_doc2x_api_key(self) -> str:
+        """Get Doc2X API key or raise error."""
+        if not self.doc2x.api_key:
+            raise ValueError(
+                "Doc2X API key not configured. Set DOC2X_API_KEY environment variable "
+                "or add [doc2x] api_key = '...' to your config file."
+            )
+        return self.doc2x.api_key
 
