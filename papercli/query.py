@@ -74,20 +74,12 @@ Please provide:
 
 If the original query is in Chinese, also provide **query_zh** with the Chinese version."""
 
-    try:
-        intent = await llm.intent_completion(
-            prompt=prompt,
-            response_model=QueryIntent,
-            system_prompt=INTENT_SYSTEM_PROMPT,
-        )
-    except Exception:
-        # Fallback: use query as-is with empty keywords
-        # (Chinese text doesn't split well by spaces)
-        intent = QueryIntent(
-            reasoning="Fallback mode: using original query as-is due to LLM error.",
-            query_en=query,
-            keywords=[],
-        )
+    # Let LLMError propagate for proper diagnostics
+    intent = await llm.intent_completion(
+        prompt=prompt,
+        response_model=QueryIntent,
+        system_prompt=INTENT_SYSTEM_PROMPT,
+    )
 
     # Cache result
     if cache:

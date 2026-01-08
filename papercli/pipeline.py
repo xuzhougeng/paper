@@ -140,7 +140,7 @@ async def _run_pipeline_async(
     """Async implementation of the pipeline."""
     from papercli.cache import Cache
     from papercli.eval import rerank_with_llm
-    from papercli.llm import LLMClient
+    from papercli.llm import LLMClient, LLMError
     from papercli.query import extract_intent
     from papercli.rank import coarse_rank, deduplicate
 
@@ -152,40 +152,46 @@ async def _run_pipeline_async(
 
     # Step 1: Extract query intent (show spinner while processing)
     intent = None
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        disable=not show_progress,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("[cyan]Step 1/5: Analyzing query intent...", total=None)
-        intent = await extract_intent(query, llm, cache)
-        progress.update(task, description="[green]✓ Query analyzed")
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            disable=not show_progress,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("[cyan]Step 1/5: Analyzing query intent...", total=None)
+            intent = await extract_intent(query, llm, cache)
+            progress.update(task, description="[green]✓ Query analyzed")
+    except LLMError as e:
+        # Display actionable error message
+        if show_progress:
+            console.print(
+                "[bold red]❌ Query analysis failed[/bold red]\n\n"
+                f"[yellow]{e.args[0]}[/yellow]\n"
+            )
+            if e.model or e.base_url:
+                console.print("[dim]Configuration:[/dim]")
+                if e.model:
+                    console.print(f"  • Model: [cyan]{e.model}[/cyan]")
+                if e.base_url:
+                    console.print(f"  • Base URL: [cyan]{e.base_url}[/cyan]")
+                console.print()
+            if e.original_exception:
+                console.print(
+                    f"[dim]Original error:[/dim] {type(e.original_exception).__name__}: {e.original_exception}\n"
+                )
+            if verbose and e.raw_responses:
+                console.print("[dim]Raw LLM response(s):[/dim]")
+                for i, resp in enumerate(e.raw_responses, 1):
+                    truncated = resp[:1000] + "..." if len(resp) > 1000 else resp
+                    console.print(f"  [dim][{i}][/dim] {truncated}\n")
+            if not verbose:
+                console.print("[dim]Run with --verbose for more details (including raw LLM responses).[/dim]")
+        raise  # Re-raise for non-zero exit
 
     # Display intent analysis results
     _display_intent_analysis(intent, show_progress)
-
-    # Check for fallback mode (LLM error) - exit early with helpful message
-    if not intent.keywords and "Fallback" in intent.reasoning:
-        if show_progress:
-            intent_model = settings.get_intent_model()
-            base_url = settings.llm.base_url
-            console.print(
-                "[bold red]❌ Query analysis failed[/bold red]\n\n"
-                "[yellow]The LLM could not analyze your query. This usually means:[/yellow]\n"
-                "  • API key is not configured or invalid\n"
-                "  • LLM service is unavailable\n"
-                "  • Network connection issues\n\n"
-                f"[dim]Current configuration:[/dim]\n"
-                f"  • Model: [cyan]{intent_model}[/cyan]\n"
-                f"  • Base URL: [cyan]{base_url}[/cyan]\n\n"
-                "[dim]Please check your configuration:[/dim]\n"
-                "  • Set [cyan]LLM_API_KEY[/cyan] environment variable\n"
-                "  • Or configure in [cyan]~/.papercli.toml[/cyan]\n\n"
-                "[dim]Run with --verbose for more details.[/dim]"
-            )
-        return []
 
     # Continue with the rest of the pipeline
     with Progress(

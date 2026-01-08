@@ -271,7 +271,15 @@ async def _check_pubmed() -> tuple[bool, str, float | None]:
     """Check PubMed API connectivity."""
     import time
     import httpx
+    import socket
     try:
+        # Resolve once so we can provide actionable diagnostics on connect failures.
+        resolved_ip: str | None = None
+        try:
+            resolved_ip = socket.gethostbyname("eutils.ncbi.nlm.nih.gov")
+        except Exception:
+            resolved_ip = None
+
         start = time.time()
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/einfo.fcgi?db=pubmed&retmode=json"
@@ -282,7 +290,14 @@ async def _check_pubmed() -> tuple[bool, str, float | None]:
     except httpx.TimeoutException:
         return False, "Connection timeout", None
     except httpx.ConnectError as e:
-        return False, "Cannot connect to server", None
+        detail = str(e) if str(e) else "Cannot connect to server"
+        if resolved_ip:
+            # 198.18.0.0/15 is reserved for benchmarking; seeing it here usually means DNS hijack/block.
+            if resolved_ip.startswith("198.18."):
+                detail = f"{detail} (DNS -> {resolved_ip}; possible DNS hijack/block)"
+            else:
+                detail = f"{detail} (DNS -> {resolved_ip})"
+        return False, detail[:80], None
     except Exception as e:
         error_msg = str(e)[:50] if str(e) else "Connection failed"
         return False, error_msg, None
