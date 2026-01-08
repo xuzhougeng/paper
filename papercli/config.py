@@ -57,14 +57,12 @@ class Settings(BaseModel):
 
     def _load_from_env(self) -> None:
         """Load configuration from environment variables."""
-        # LLM API key
-        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("LLM_API_KEY")
-        if api_key:
+        # LLM API key (LLM_API_KEY only)
+        if api_key := os.environ.get("LLM_API_KEY"):
             self.llm.api_key = api_key
 
-        # LLM base URL
-        base_url = os.environ.get("LLM_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
-        if base_url:
+        # LLM base URL (LLM_BASE_URL only)
+        if base_url := os.environ.get("LLM_BASE_URL"):
             self.llm.base_url = base_url
 
         # Model overrides from env
@@ -162,7 +160,7 @@ class Settings(BaseModel):
         """Get LLM API key or raise error."""
         if not self.llm.api_key:
             raise ValueError(
-                "LLM API key not configured. Set OPENAI_API_KEY or LLM_API_KEY environment variable."
+                "LLM API key not configured. Set LLM_API_KEY environment variable."
             )
         return self.llm.api_key
 

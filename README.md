@@ -27,21 +27,17 @@ Set the following environment variables:
 
 ```bash
 # Required: LLM API key (OpenAI or compatible)
-export OPENAI_API_KEY="sk-..."
-# Or use a custom key name
-export LLM_API_KEY="your-key"
+export LLM_API_KEY="sk-..."
 
-# Required for Google Scholar search
-export SERPAPI_API_KEY="your-serpapi-key"
-
-# Optional: Custom LLM endpoint (OpenAI-compatible)
+# Optional: Custom LLM endpoint (OpenAI-compatible, defaults to OpenAI)
 export LLM_BASE_URL="https://api.openai.com/v1"
-# Or use OPENAI_BASE_URL (same effect)
-export OPENAI_BASE_URL="https://api.openai.com/v1"
 
 # Optional: Model configuration (defaults shown)
-export PAPERCLI_INTENT_MODEL="gpt-5.2"  # Default: gpt-4o-mini
-export PAPERCLI_EVAL_MODEL="gpt-5-mini"          # Default: gpt-4o
+export PAPERCLI_INTENT_MODEL="gpt-4o-mini"  # For query rewriting
+export PAPERCLI_EVAL_MODEL="gpt-4o"          # For paper evaluation
+
+# Optional: Required for Google Scholar search
+export SERPAPI_API_KEY="your-serpapi-key"
 ```
 
 Or create a `~/.papercli.toml` configuration file:
