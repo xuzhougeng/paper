@@ -1,7 +1,7 @@
 """LLM-based reranking and evidence extraction."""
 
 import asyncio
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from pydantic import BaseModel, Field
 
@@ -10,6 +10,9 @@ from papercli.models import EvalResult, Paper
 if TYPE_CHECKING:
     from papercli.cache import Cache
     from papercli.llm import LLMClient
+
+# Type for progress callback: (current_index, total) -> None
+ProgressCallback = Callable[[int, int], None]
 
 EVAL_SYSTEM_PROMPT = """You are an expert at evaluating academic paper relevance. Given a user's search query and a paper's title and abstract, you must:
 
@@ -38,6 +41,7 @@ async def rerank_with_llm(
     papers: list[Paper],
     llm: "LLMClient",
     cache: Optional["Cache"] = None,
+    progress_callback: Optional[ProgressCallback] = None,
 ) -> list[EvalResult]:
     """
     Rerank papers using LLM evaluation.
@@ -47,6 +51,7 @@ async def rerank_with_llm(
         papers: List of papers to evaluate
         llm: LLM client
         cache: Optional cache
+        progress_callback: Optional callback for progress updates (current, total)
 
     Returns:
         List of EvalResult with scores and evidence
@@ -54,33 +59,48 @@ async def rerank_with_llm(
     if not papers:
         return []
 
-    # Evaluate papers concurrently (with rate limiting)
+    total = len(papers)
+    eval_results = []
+
+    # Process papers with progress updates
+    # Use semaphore to limit concurrent requests (avoid rate limiting)
+    semaphore = asyncio.Semaphore(5)  # Max 5 concurrent evaluations
+
+    async def evaluate_with_semaphore(index: int, paper: Paper) -> tuple[int, EvalResult]:
+        async with semaphore:
+            result = await _evaluate_paper(query, paper, llm, cache)
+            return index, result
+
+    # Create tasks
     tasks = [
-        _evaluate_paper(query, paper, llm, cache)
-        for paper in papers
+        evaluate_with_semaphore(i, paper)
+        for i, paper in enumerate(papers)
     ]
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Process results as they complete
+    completed = 0
+    for coro in asyncio.as_completed(tasks):
+        try:
+            index, result = await coro
+            eval_results.append((index, result))
+        except Exception as e:
+            # This shouldn't happen as _evaluate_paper handles exceptions
+            eval_results.append((completed, EvalResult(
+                paper=papers[completed],
+                score=1.0,
+                meets_need=False,
+                evidence_quote=papers[completed].title,
+                evidence_field="title",
+                short_reason="Evaluation failed",
+            )))
 
-    # Filter out failures and convert to EvalResult
-    eval_results = []
-    for paper, result in zip(papers, results):
-        if isinstance(result, Exception):
-            # Fallback: create low-confidence result
-            eval_results.append(
-                EvalResult(
-                    paper=paper,
-                    score=1.0,
-                    meets_need=False,
-                    evidence_quote=paper.title,
-                    evidence_field="title",
-                    short_reason="Evaluation failed - using fallback score",
-                )
-            )
-        else:
-            eval_results.append(result)
+        completed += 1
+        if progress_callback:
+            progress_callback(completed, total)
 
-    return eval_results
+    # Sort by original index to maintain order
+    eval_results.sort(key=lambda x: x[0])
+    return [result for _, result in eval_results]
 
 
 async def _evaluate_paper(

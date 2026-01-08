@@ -76,6 +76,10 @@ def find(
         bool,
         typer.Option("--verbose", "-V", help="Enable verbose output"),
     ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
 ) -> None:
     """
     Find academic papers relevant to your query.
@@ -118,6 +122,7 @@ def find(
             prefilter_k=prefilter_k,
             settings=settings,
             verbose=verbose,
+            quiet=quiet,
         )
 
         # Output results

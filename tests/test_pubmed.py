@@ -118,6 +118,7 @@ class TestPubMedQueryBuilding:
 
         source = PubMedSource()
         intent = QueryIntent(
+            reasoning="User wants papers about CRISPR gene editing technology.",
             query_en="CRISPR gene editing",
             keywords=["CRISPR", "gene", "editing"],
         )
@@ -132,6 +133,7 @@ class TestPubMedQueryBuilding:
 
         source = PubMedSource()
         intent = QueryIntent(
+            reasoning="User wants machine learning papers, specifically about deep learning.",
             query_en="machine learning",
             keywords=["machine", "learning"],
             required_phrases=["deep learning"],
@@ -146,6 +148,7 @@ class TestPubMedQueryBuilding:
 
         source = PubMedSource()
         intent = QueryIntent(
+            reasoning="User wants cancer therapy papers but not review articles.",
             query_en="cancer therapy",
             keywords=["cancer", "therapy"],
             exclude_terms=["review"],

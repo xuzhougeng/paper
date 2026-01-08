@@ -50,6 +50,7 @@ def sample_query_intent():
     from papercli.models import QueryIntent
 
     return QueryIntent(
+        reasoning="User is looking for papers about applying deep learning to drug discovery.",
         query_en="deep learning drug discovery",
         keywords=["deep learning", "drug", "discovery"],
         synonyms={"drug": ["pharmaceutical", "compound"]},

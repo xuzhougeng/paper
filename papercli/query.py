@@ -8,17 +8,16 @@ if TYPE_CHECKING:
     from papercli.cache import Cache
     from papercli.llm import LLMClient
 
-INTENT_SYSTEM_PROMPT = """You are a search query expert. Given a user's natural language query about academic papers, extract the search intent and generate optimized search terms.
+INTENT_SYSTEM_PROMPT = """You are a search query expert specializing in academic literature search. Given a user's natural language query about academic papers, you must:
 
-Your task:
-1. Understand what the user is looking for
-2. Generate an English search query optimized for academic databases
-3. Identify key terms, synonyms, and related concepts
-4. Identify any phrases that must appear (quoted phrases)
-5. Identify any terms to exclude
+1. First, think step-by-step about what the user really wants to find
+2. Analyze the domain, key concepts, and research context
+3. Generate an optimized English search query for academic databases
+4. Identify key terms, synonyms, abbreviations, and related concepts
+5. Determine if any specific phrases must appear or terms should be excluded
 
-Focus on scientific/academic terminology. Expand abbreviations when helpful.
-If the query is in Chinese or another language, translate it to English for search."""
+Focus on scientific/academic terminology. Always expand abbreviations and provide common synonyms.
+If the query is in Chinese or another language, translate it to English for search while preserving the original meaning."""
 
 
 async def extract_intent(
@@ -46,16 +45,29 @@ async def extract_intent(
 
     prompt = f"""Analyze this search query and extract the search intent:
 
-Query: "{query}"
+User Query: "{query}"
 
-Extract:
-1. An optimized English search query for academic databases (query_en)
-2. Key terms that should be searched (keywords)
-3. Synonyms or related terms for important concepts (synonyms - as dict mapping term to list of synonyms)
-4. Any exact phrases that must appear (required_phrases)
-5. Any terms to exclude from results (exclude_terms)
+Please provide:
 
-If the original query is in Chinese, also provide query_zh with the Chinese version."""
+1. **reasoning**: Your step-by-step thinking process:
+   - What is the user looking for?
+   - What research domain/field is this?
+   - What are the key concepts?
+   - Are there any abbreviations to expand?
+   - What related terms might help find relevant papers?
+
+2. **query_en**: An optimized English search query for academic databases (concise but comprehensive)
+
+3. **keywords**: Key terms that should be searched (list of important words/phrases)
+
+4. **synonyms**: A dictionary mapping key terms to their synonyms/related terms/abbreviations
+   Example: {{"CRISPR": ["Cas9", "gene editing", "genome editing"], "cancer": ["tumor", "carcinoma", "malignancy"]}}
+
+5. **required_phrases**: Any exact phrases that must appear in results (usually empty unless user specified)
+
+6. **exclude_terms**: Any terms to exclude from results (usually empty unless user wants to filter something out)
+
+If the original query is in Chinese, also provide **query_zh** with the Chinese version."""
 
     try:
         intent = await llm.intent_completion(
@@ -66,6 +78,7 @@ If the original query is in Chinese, also provide query_zh with the Chinese vers
     except Exception:
         # Fallback: use query as-is
         intent = QueryIntent(
+            reasoning="Fallback mode: using original query as-is due to LLM error.",
             query_en=query,
             keywords=query.split(),
         )
@@ -75,4 +88,3 @@ If the original query is in Chinese, also provide query_zh with the Chinese vers
         await cache.set(cache_key, intent.model_dump())
 
     return intent
-

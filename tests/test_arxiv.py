@@ -107,6 +107,7 @@ class TestArxivQueryBuilding:
 
         source = ArxivSource()
         intent = QueryIntent(
+            reasoning="User wants papers about neural networks.",
             query_en="neural networks",
             keywords=["neural", "networks"],
         )
@@ -120,6 +121,7 @@ class TestArxivQueryBuilding:
 
         source = ArxivSource()
         intent = QueryIntent(
+            reasoning="User wants papers about deep learning for NLP applications.",
             query_en="deep learning for natural language processing applications",
             keywords=["deep", "learning", "NLP"],
         )

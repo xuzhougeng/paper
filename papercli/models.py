@@ -44,7 +44,8 @@ class EvalResult(BaseModel):
 class QueryIntent(BaseModel):
     """Parsed query intent from LLM."""
 
-    query_en: str = Field(..., description="English search query")
+    reasoning: str = Field(..., description="Step-by-step thinking about what the user wants")
+    query_en: str = Field(..., description="Optimized English search query")
     query_zh: Optional[str] = Field(None, description="Chinese search query (if applicable)")
     keywords: list[str] = Field(default_factory=list, description="Key terms to search")
     synonyms: dict[str, list[str]] = Field(
