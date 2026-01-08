@@ -70,7 +70,7 @@ class LLMClient:
         prompt: str,
         model: str | None = None,
         system_prompt: str | None = None,
-        temperature: float = 0.0,
+        temperature: float = 1.0,
         max_tokens: int = 2000,
     ) -> str:
         """
@@ -88,19 +88,15 @@ class LLMClient:
         """
         model = model or self.settings.get_intent_model()
 
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
-        response = await self._call_api(
+        response_text = await self._call_api_text(
             model=model,
-            messages=messages,
+            prompt=prompt,
+            system_prompt=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
         )
 
-        return response.choices[0].message.content or ""
+        return response_text
 
     async def complete_json(
         self,
@@ -108,7 +104,7 @@ class LLMClient:
         response_model: type[T],
         model: str | None = None,
         system_prompt: str | None = None,
-        temperature: float = 0.0,
+        temperature: float = 1.0,
         max_tokens: int = 2000,
         retry_on_parse_error: bool = True,
     ) -> T:
@@ -190,7 +186,7 @@ class LLMClient:
                     + "\n\nReminder: return ONLY a JSON object with actual values for the fields.",
                     model=model,
                     system_prompt=stricter_system,
-                    temperature=0.0,
+                    temperature=1.0,
                     max_tokens=max_tokens,
                 )
                 raw_responses.append(response_text)
@@ -225,20 +221,141 @@ class LLMClient:
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
     )
-    async def _call_api(
+    async def _call_api_text(
         self,
+        *,
         model: str,
-        messages: list[dict[str, str]],
+        prompt: str,
+        system_prompt: str | None,
         temperature: float,
         max_tokens: int,
-    ) -> Any:
-        """Call the OpenAI API with retry logic."""
-        return await self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+    ) -> str:
+        """
+        Call the LLM and return plain text.
+
+        Strategy:
+        - For models starting with "gpt", prefer the Responses API when available.
+        - If the server doesn't support Responses (common for some proxies), fall back to Chat Completions.
+        - For Chat Completions, try max_completion_tokens first for gpt* models, then fall back to max_tokens.
+        """
+        base_url = self.settings.llm.base_url
+
+        model_is_gpt = model.lower().startswith("gpt")
+
+        # Prefer Responses API for gpt* models when the SDK supports it.
+        if model_is_gpt and hasattr(self.client, "responses"):
+            try:
+                resp = await self.client.responses.create(
+                    model=model,
+                    input=[{"role": "user", "content": prompt}],
+                    instructions=system_prompt,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                )
+                text = self._extract_text_from_responses(resp)
+                return text
+            except Exception as e:
+                # If Responses isn't supported by the server/proxy, fall back to chat.completions.
+                msg = str(e).lower()
+                # We treat these as "endpoint not available / provider doesn't implement Responses".
+                if (
+                    "404" not in msg
+                    and "not found" not in msg
+                    and "unknown url" not in msg
+                    and "unsupported" not in msg
+                    and "not supported" not in msg
+                ):
+                    # For non-endpoint errors, re-raise so tenacity can retry.
+                    raise
+
+        # Chat Completions (proxy-friendly)
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        # Many gpt* models prefer max_completion_tokens; many proxies only accept max_tokens.
+        use_max_completion_tokens = model_is_gpt
+        try:
+            if use_max_completion_tokens:
+                resp = await self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_completion_tokens=max_tokens,
+                )
+            else:
+                resp = await self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            # Parameter compatibility fallback: if the server rejects the chosen token param, retry once.
+            msg = str(e).lower()
+            if use_max_completion_tokens and ("max_completion_tokens" in msg or "unsupported" in msg):
+                resp = await self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                return resp.choices[0].message.content or ""
+            if (not use_max_completion_tokens) and ("max_tokens" in msg or "unsupported" in msg):
+                resp = await self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_completion_tokens=max_tokens,
+                )
+                return resp.choices[0].message.content or ""
+            # If the model likely requires /v1/responses but we're on a proxy, raise a clearer error.
+            if ("not supported" in msg or "unsupported" in msg) and "chat/completions" in msg:
+                raise LLMError(
+                    f"LLM API call failed (model may require /v1/responses; base_url={base_url}). {e}",
+                    model=model,
+                    base_url=base_url,
+                    original_exception=e,
+                )
+            raise
+
+    def _extract_text_from_responses(self, resp: Any) -> str:
+        """
+        Extract text from a Responses API response in a tolerant way.
+
+        SDKs expose a convenience property `output_text`, but we keep fallbacks for robustness.
+        """
+        try:
+            text = getattr(resp, "output_text", None)
+            if isinstance(text, str) and text.strip():
+                return text
+        except Exception:
+            pass
+
+        # Fallback: walk the output structure
+        try:
+            output = getattr(resp, "output", None)
+            if isinstance(output, list):
+                parts: list[str] = []
+                for item in output:
+                    content = getattr(item, "content", None)
+                    if isinstance(content, list):
+                        for c in content:
+                            # Prefer `text` / `value` fields if present
+                            for key in ("text", "value", "content"):
+                                v = getattr(c, key, None)
+                                if isinstance(v, str) and v:
+                                    parts.append(v)
+                                    break
+                joined = "\n".join(p for p in parts if p)
+                if joined.strip():
+                    return joined
+        except Exception:
+            pass
+
+        return ""
 
     def _looks_like_schema_dict(self, d: dict) -> bool:
         """Heuristic to detect JSON Schema-ish dicts returned by some models/proxies."""

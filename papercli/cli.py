@@ -256,6 +256,7 @@ async def _run_checks(settings: "Settings", sources: list[str]) -> None:
 async def _check_llm(settings: "Settings") -> tuple[bool, str, float | None]:
     """Check LLM API connectivity."""
     import time
+    import re
     try:
         from papercli.llm import LLMClient
         llm = LLMClient(settings)
@@ -263,15 +264,30 @@ async def _check_llm(settings: "Settings") -> tuple[bool, str, float | None]:
         response = await llm.complete(
             prompt="Say 'OK' if you can read this.",
             model=settings.get_intent_model(),
-            max_tokens=10,
+            max_tokens=16,
         )
         elapsed = (time.time() - start) * 1000
         if response:
             return True, "Connected", elapsed
         return False, "Empty response", elapsed
     except Exception as e:
-        error_msg = str(e)[:50]
-        return False, error_msg, None
+        # Keep this single-line so the Rich table stays readable.
+        raw = str(e) if str(e) else repr(e)
+        one_line = re.sub(r"\s+", " ", raw).strip()
+
+        model = settings.get_intent_model()
+        base_url = settings.llm.base_url
+        hint = ""
+        # Common failure mode: OpenAI-compatible proxies that don't support newer models/endpoints.
+        if ("openai-proxy" in base_url.lower() or "proxy" in base_url.lower()) and model.startswith("gpt-5"):
+            hint = "Hint: this proxy may not support gpt-5.* models; try LLM_BASE_URL=https://api.openai.com/v1 or use gpt-4o."
+
+        msg = one_line
+        if hint and hint not in msg:
+            msg = f"{msg} | {hint}"
+
+        # Avoid truncating too aggressively; Rich will wrap long cells anyway.
+        return False, msg[:220], None
 
 
 async def _check_pubmed() -> tuple[bool, str, float | None]:

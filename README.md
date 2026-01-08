@@ -41,7 +41,7 @@ export PAPERCLI_EVAL_MODEL="gpt-4o"          # For paper evaluation
 export SERPAPI_API_KEY="your-serpapi-key"
 ```
 
-注: PAPERCLI_INTENT_MODEL建议模型不能弱于gpt-4o。如果无法使用官方API，可以通过LLM_BASEL_URL设置第三方代理。例如我用的是[CloseAI](https://referer.shadowai.xyz/r/12432)
+注: PAPERCLI_INTENT_MODEL建议模型不能弱于gpt-4o。如果无法使用官方API，可以通过LLM_BASE_URL设置第三方代理。例如我用的是[CloseAI](https://referer.shadowai.xyz/r/12432)。
 
 Or create a `~/.papercli.toml` configuration file:
 
