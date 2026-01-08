@@ -32,7 +32,7 @@ def format_output(
     results = results[:top_n]
 
     if not results:
-        return "No papers found matching your query."
+        return ""  # Empty results handled by pipeline
 
     if format == "json":
         return _format_json(results)

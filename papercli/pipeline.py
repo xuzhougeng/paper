@@ -166,6 +166,22 @@ async def _run_pipeline_async(
     # Display intent analysis results
     _display_intent_analysis(intent, show_progress)
 
+    # Check for fallback mode (LLM error) - exit early with helpful message
+    if not intent.keywords and "Fallback" in intent.reasoning:
+        if show_progress:
+            console.print(
+                "[bold red]❌ Query analysis failed[/bold red]\n\n"
+                "[yellow]The LLM could not analyze your query. This usually means:[/yellow]\n"
+                "  • API key is not configured or invalid\n"
+                "  • LLM service is unavailable\n"
+                "  • Network connection issues\n\n"
+                "[dim]Please check your configuration:[/dim]\n"
+                "  • Set [cyan]LLM_API_KEY[/cyan] environment variable\n"
+                "  • Or configure in [cyan]~/.papercli.toml[/cyan]\n\n"
+                "[dim]Run with --verbose for more details.[/dim]"
+            )
+        return []
+
     # Continue with the rest of the pipeline
     with Progress(
         SpinnerColumn(),
