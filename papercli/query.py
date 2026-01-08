@@ -58,7 +58,12 @@ Please provide:
 
 2. **query_en**: An optimized English search query for academic databases (concise but comprehensive)
 
-3. **keywords**: Key terms that should be searched (list of important words/phrases)
+3. **keywords**: Key terms that should be searched. IMPORTANT RULES:
+   - ALL keywords MUST be in English (translate if the query is in another language)
+   - Each keyword should be 1-3 words maximum (e.g., "gene discovery", "plant biology", "CRISPR")
+   - Do NOT include full sentences or long phrases
+   - Include 5-10 relevant scientific/academic terms
+   Example: ["gene discovery", "plant genomics", "novel genes", "functional annotation", "gene prediction"]
 
 4. **synonyms**: A dictionary mapping key terms to their synonyms/related terms/abbreviations
    Example: {{"CRISPR": ["Cas9", "gene editing", "genome editing"], "cancer": ["tumor", "carcinoma", "malignancy"]}}
@@ -76,11 +81,12 @@ If the original query is in Chinese, also provide **query_zh** with the Chinese 
             system_prompt=INTENT_SYSTEM_PROMPT,
         )
     except Exception:
-        # Fallback: use query as-is
+        # Fallback: use query as-is with empty keywords
+        # (Chinese text doesn't split well by spaces)
         intent = QueryIntent(
             reasoning="Fallback mode: using original query as-is due to LLM error.",
             query_en=query,
-            keywords=query.split(),
+            keywords=[],
         )
 
     # Cache result

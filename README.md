@@ -40,8 +40,8 @@ export LLM_BASE_URL="https://api.openai.com/v1"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 
 # Optional: Model configuration (defaults shown)
-export PAPERCLI_INTENT_MODEL="gpt-4o-mini"  # Default: gpt-4o-mini
-export PAPERCLI_EVAL_MODEL="gpt-4o"          # Default: gpt-4o
+export PAPERCLI_INTENT_MODEL="gpt-5.2"  # Default: gpt-4o-mini
+export PAPERCLI_EVAL_MODEL="gpt-5-mini"          # Default: gpt-4o
 ```
 
 Or create a `~/.papercli.toml` configuration file:

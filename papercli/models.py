@@ -47,7 +47,7 @@ class QueryIntent(BaseModel):
     reasoning: str = Field(..., description="Step-by-step thinking about what the user wants")
     query_en: str = Field(..., description="Optimized English search query")
     query_zh: Optional[str] = Field(None, description="Chinese search query (if applicable)")
-    keywords: list[str] = Field(default_factory=list, description="Key terms to search")
+    keywords: list[str] = Field(default_factory=list, description="Key terms to search (English only, 1-3 words each)")
     synonyms: dict[str, list[str]] = Field(
         default_factory=dict, description="Synonyms/abbreviations mapping"
     )

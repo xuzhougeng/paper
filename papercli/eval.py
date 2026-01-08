@@ -223,4 +223,3 @@ def _validate_evidence(evaluation: PaperEvaluation, paper: Paper) -> PaperEvalua
         evidence_field="title",
         short_reason=evaluation.short_reason,
     )
-
