@@ -9,7 +9,7 @@ description = "CLI tool for searching academic papers using LLM-powered query un
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "Your Name", email = "you@example.com" }]
+authors = [{ name = "Zhou-Geng Xu", email = "xuzhougeng@163.com" }]
 keywords = ["papers", "literature", "search", "llm", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",

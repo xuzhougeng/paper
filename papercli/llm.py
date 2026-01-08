@@ -134,9 +134,15 @@ class LLMClient:
         model = model or self.settings.get_intent_model()
         base_url = self.settings.llm.base_url
 
-        # Build schema description for the prompt
-        schema_json = json.dumps(response_model.model_json_schema(), indent=2)
-        json_instruction = f"\n\nRespond with valid JSON matching this schema:\n```json\n{schema_json}\n```\nReturn ONLY the JSON object, no other text."
+        # Build a compact "shape" instruction rather than embedding full JSON Schema.
+        # Some models/proxies may echo the schema itself, causing huge/incomplete outputs.
+        shape_instruction = self._build_json_shape_instruction(response_model)
+        json_instruction = (
+            "\n\nReturn ONLY a JSON object.\n"
+            "- No markdown, no code fences, no commentary.\n"
+            "- Do NOT return a JSON Schema (no keys like: description, title, type, properties, items, anyOf, allOf, oneOf, required, $defs, $ref).\n"
+            + shape_instruction
+        )
 
         full_system = (system_prompt or "") + json_instruction
 
@@ -174,10 +180,14 @@ class LLMClient:
             try:
                 stricter_system = (
                     (system_prompt or "")
-                    + f"\n\nYou MUST respond with ONLY a valid JSON object. No markdown, no explanation, just JSON.\nSchema:\n{schema_json}"
+                    + "\n\nYour previous response was invalid (not a JSON instance object matching the required keys). "
+                    + "You MUST respond with ONLY a single JSON object (no markdown, no code fences, no prose). "
+                    + "Do NOT return schema metadata (description/title/type/properties/etc)."
+                    + shape_instruction
                 )
                 response_text = await self.complete(
-                    prompt=prompt + "\n\nRemember: Return ONLY valid JSON, nothing else.",
+                    prompt=prompt
+                    + "\n\nReminder: return ONLY a JSON object with actual values for the fields.",
                     model=model,
                     system_prompt=stricter_system,
                     temperature=0.0,
@@ -246,6 +256,61 @@ class LLMClient:
             "$ref",
         }
         return any(k in d for k in schema_keys)
+
+    def _build_json_shape_instruction(self, response_model: type[T]) -> str:
+        """
+        Build a compact instruction that describes the expected JSON instance shape.
+
+        We avoid embedding the full JSON Schema because some models/proxies echo it back.
+        """
+        schema = response_model.model_json_schema()
+        required = schema.get("required", []) or []
+        props: dict[str, Any] = schema.get("properties", {}) or {}
+
+        required_str = ", ".join(required) if required else "(none)"
+        optional = [k for k in props.keys() if k not in set(required)]
+        optional_str = ", ".join(optional) if optional else "(none)"
+
+        example: dict[str, Any] = {}
+        # Put required fields first for readability
+        for key in required + [k for k in props.keys() if k not in required]:
+            info = props.get(key, {})
+            example[key] = self._example_value_for_schema(info, is_required=key in required)
+
+        example_json = json.dumps(example, ensure_ascii=False, indent=2)
+        return (
+            f"\nThe JSON object MUST include required keys: {required_str}\n"
+            f"Optional keys: {optional_str}\n"
+            "Example (shape only; replace values with real content):\n"
+            f"{example_json}\n"
+        )
+
+    def _example_value_for_schema(self, info: dict[str, Any], *, is_required: bool) -> Any:
+        """Create a small example value for a field based on its JSON schema snippet."""
+        # anyOf often used for Optional[T] (e.g. string|null)
+        if "anyOf" in info and isinstance(info["anyOf"], list):
+            # Prefer a non-null type for required, null for optional
+            if not is_required:
+                return None
+            non_null = next((x for x in info["anyOf"] if x.get("type") != "null"), {})
+            return self._example_value_for_schema(non_null, is_required=True)
+
+        t = info.get("type")
+        if t == "string":
+            return "..."
+        if t == "integer":
+            return 0
+        if t == "number":
+            return 0.0
+        if t == "boolean":
+            return False
+        if t == "array":
+            return []
+        if t == "object":
+            return {}
+
+        # Fallback: keep it simple
+        return None
 
     def _normalize_schema_echo_value(self, v: Any) -> tuple[bool, Any]:
         """
