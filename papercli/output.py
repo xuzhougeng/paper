@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from papercli.models import EvalResult
+from papercli.models import EvalResult, PlatformQueryResult
 
 
 def format_output(
@@ -208,4 +208,162 @@ def format_summary(results: list[EvalResult], total_searched: int) -> Text:
     text.append(f"{total_searched}", style="bold")
     text.append(" candidates", style="dim")
     return text
+
+
+# ============================================================================
+# Platform Query Output Formatting
+# ============================================================================
+
+def format_query_output(
+    result: PlatformQueryResult,
+    format: Literal["table", "json", "md"],
+) -> str | Panel:
+    """
+    Format platform query generation result for output.
+
+    Args:
+        result: The platform query generation result
+        format: Output format (table, json, md)
+
+    Returns:
+        Formatted output (string for json/md, Rich Panel for table)
+    """
+    if format == "json":
+        return _format_query_json(result)
+    elif format == "md":
+        return _format_query_markdown(result)
+    else:  # table
+        return _format_query_table(result)
+
+
+def _format_query_json(result: PlatformQueryResult) -> str:
+    """Format platform query result as JSON."""
+    output = {
+        "platform": result.platform,
+        "platform_query": result.platform_query,
+        "notes": result.notes,
+        "intent": {
+            "query_en": result.intent.query_en,
+            "query_zh": result.intent.query_zh,
+            "keywords": result.intent.keywords,
+            "synonyms": result.intent.synonyms,
+            "required_phrases": result.intent.required_phrases,
+            "exclude_terms": result.intent.exclude_terms,
+        },
+    }
+    return json.dumps(output, indent=2, ensure_ascii=False)
+
+
+def _format_query_markdown(result: PlatformQueryResult) -> str:
+    """Format platform query result as Markdown."""
+    lines = [f"# Search Query for {result.platform.upper()}\n"]
+
+    # The main query - easy to copy
+    lines.append("## Search Query\n")
+    lines.append("```")
+    lines.append(result.platform_query)
+    lines.append("```\n")
+
+    # Notes
+    if result.notes:
+        lines.append("## Notes\n")
+        lines.append(f"{result.notes}\n")
+
+    # Intent details
+    lines.append("## Query Analysis\n")
+    lines.append(f"**English Query:** {result.intent.query_en}\n")
+    
+    if result.intent.query_zh:
+        lines.append(f"**Chinese Query:** {result.intent.query_zh}\n")
+
+    if result.intent.keywords:
+        lines.append(f"**Keywords:** {', '.join(result.intent.keywords)}\n")
+
+    if result.intent.synonyms:
+        lines.append("**Synonyms:**\n")
+        for term, syns in result.intent.synonyms.items():
+            lines.append(f"- {term}: {', '.join(syns)}")
+        lines.append("")
+
+    if result.intent.required_phrases:
+        lines.append(f"**Required Phrases:** {', '.join(f'\"{p}\"' for p in result.intent.required_phrases)}\n")
+
+    if result.intent.exclude_terms:
+        lines.append(f"**Exclude Terms:** {', '.join(result.intent.exclude_terms)}\n")
+
+    return "\n".join(lines)
+
+
+def _format_query_table(result: PlatformQueryResult) -> Panel:
+    """Format platform query result as Rich Panel."""
+    content = Text()
+
+    # Platform name
+    platform_display = {
+        "pubmed": "PubMed",
+        "scholar": "Google Scholar",
+        "wos": "Web of Science",
+    }.get(result.platform, result.platform.upper())
+
+    # Main query - prominent display
+    content.append("🔍 ", style="bold")
+    content.append("Search Query:\n", style="bold green")
+    content.append(f"   {result.platform_query}\n", style="bold white")
+
+    # Notes
+    if result.notes and "[Fallback" not in result.notes:
+        content.append("\n💡 ", style="bold")
+        content.append("Tips: ", style="bold yellow")
+        content.append(f"{result.notes}\n", style="dim")
+    elif result.notes:
+        content.append("\n⚠️  ", style="bold")
+        content.append(f"{result.notes}\n", style="yellow")
+
+    content.append("\n")
+
+    # Keywords
+    if result.intent.keywords:
+        content.append("🏷️  ", style="bold")
+        content.append("Keywords: ", style="bold cyan")
+        content.append(", ".join(result.intent.keywords[:10]), style="cyan")
+        if len(result.intent.keywords) > 10:
+            content.append(f" (+{len(result.intent.keywords) - 10} more)", style="dim")
+        content.append("\n")
+
+    # Synonyms
+    if result.intent.synonyms:
+        content.append("🔄 ", style="bold")
+        content.append("Synonyms:\n", style="bold magenta")
+        for term, syns in list(result.intent.synonyms.items())[:4]:
+            syn_str = ", ".join(syns[:3])
+            if len(syns) > 3:
+                syn_str += "..."
+            content.append(f"   {term} → {syn_str}\n", style="magenta")
+        if len(result.intent.synonyms) > 4:
+            content.append(f"   ... and {len(result.intent.synonyms) - 4} more\n", style="dim")
+
+    # Required phrases
+    if result.intent.required_phrases:
+        content.append("📌 ", style="bold")
+        content.append("Required: ", style="bold blue")
+        content.append(", ".join(f'"{p}"' for p in result.intent.required_phrases), style="blue")
+        content.append("\n")
+
+    # Exclude terms
+    if result.intent.exclude_terms:
+        content.append("🚫 ", style="bold")
+        content.append("Exclude: ", style="bold red")
+        content.append(", ".join(result.intent.exclude_terms), style="red")
+        content.append("\n")
+
+    # Create panel
+    panel = Panel(
+        content,
+        title=f"[bold]{platform_display} Query[/bold]",
+        title_align="left",
+        border_style="green",
+        padding=(0, 1),
+    )
+
+    return panel
 

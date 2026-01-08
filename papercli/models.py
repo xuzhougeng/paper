@@ -58,3 +58,15 @@ class QueryIntent(BaseModel):
         default_factory=list, description="Terms to exclude from results"
     )
 
+
+class PlatformQueryResult(BaseModel):
+    """Result of platform-specific query generation."""
+
+    platform: str = Field(..., description="Target platform: pubmed, scholar, wos")
+    platform_query: str = Field(..., description="The final search query string for the platform")
+    notes: str = Field(
+        default="",
+        description="Platform-specific tips or notes (e.g., filter suggestions, syntax hints)"
+    )
+    intent: QueryIntent = Field(..., description="The underlying query intent")
+

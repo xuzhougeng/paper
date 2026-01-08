@@ -6,6 +6,7 @@ A command-line tool for searching academic papers using LLM-powered query unders
 
 - **Multi-source search**: PubMed, OpenAlex, Google Scholar (via SerpAPI), arXiv
 - **LLM-powered query understanding**: Automatically extracts intent, expands synonyms, and translates queries
+- **Platform-specific query generation**: Generate optimized search queries for PubMed, Google Scholar, or Web of Science
 - **Smart ranking**: Coarse lexical ranking followed by LLM-based relevance scoring
 - **Evidence extraction**: Returns the most relevant quote from each paper
 - **Configurable models**: Use different LLM models for intent extraction vs evaluation
@@ -82,6 +83,34 @@ paper find "single cell RNA sequencing" --verbose
 - `table` (default): Rich formatted table
 - `json`: JSON output for programmatic use
 - `md`: Markdown format
+
+### Generate platform-specific search queries
+
+Use `gen-query` to generate an optimized search query for a specific database platform without actually searching. This is useful when you want to run the search manually or refine the query.
+
+```bash
+# Generate a PubMed search query (default)
+paper gen-query "CRISPR gene editing for cancer therapy"
+
+# Generate a Google Scholar search query
+paper gen-query "single cell RNA velocity" --platform scholar
+
+# Generate a Web of Science search query
+paper gen-query "machine learning drug discovery" --platform wos
+
+# Output as Markdown (easy to copy to notes)
+paper gen-query "protein structure prediction" --platform pubmed --format md
+
+# Output as JSON (for programmatic use)
+paper gen-query "neural networks" --platform scholar --format json
+```
+
+Supported platforms:
+- `pubmed` (default): PubMed/MEDLINE - uses Boolean operators, field tags like `[Title/Abstract]`, `[MeSH Terms]`
+- `scholar`: Google Scholar - optimized for shorter, keyword-focused queries
+- `wos`: Web of Science - uses `TS=`, `TI=` field tags and `NEAR/x` proximity operators
+
+Platform aliases: `google_scholar` → `scholar`, `web_of_science` / `world_of_knowledge` → `wos`
 
 ## How it works
 

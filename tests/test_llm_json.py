@@ -286,3 +286,38 @@ class TestCompleteJsonErrorDiagnostics:
         assert "https://test.example.com/v1" in error_str
         assert "Not JSON at all" in error_str
 
+    @pytest.mark.asyncio
+    async def test_complete_json_unwraps_schema_echo_properties(self, mock_settings, mocker):
+        """
+        Some models/proxies echo schema-like structures:
+          {"description": "...", "properties": {"field": {"value": ...}}}
+        Ensure we unwrap it into a plain object for validation.
+        """
+        client = LLMClient(mock_settings)
+
+        schema_echo = """```json
+{
+  "description": "SimpleModel schema echo",
+  "properties": {
+    "name": {
+      "type": "string",
+      "value": "test"
+    },
+    "value": {
+      "type": "integer",
+      "value": 42
+    }
+  }
+}
+```"""
+        mocker.patch.object(client, "complete", return_value=schema_echo)
+
+        result = await client.complete_json(
+            prompt="test",
+            response_model=SimpleModel,
+            retry_on_parse_error=False,
+        )
+
+        assert result.name == "test"
+        assert result.value == 42
+

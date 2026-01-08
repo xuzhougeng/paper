@@ -360,6 +360,154 @@ async def _check_scholar(settings: "Settings") -> tuple[bool, str, float | None]
         return False, error_msg, None
 
 
+@app.command("gen-query")
+def gen_query(
+    query: Annotated[str, typer.Argument(help="Your search query (natural language)")],
+    platform: Annotated[
+        str,
+        typer.Option("--platform", "-p", help="Target platform: pubmed, scholar, wos (or aliases)"),
+    ] = "pubmed",
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: table, json, or md"),
+    ] = "table",
+    intent_model: Annotated[
+        Optional[str],
+        typer.Option("--intent-model", help="Model for query rewriting/intent extraction"),
+    ] = None,
+    llm_base_url: Annotated[
+        Optional[str],
+        typer.Option("--llm-base-url", help="Base URL for OpenAI-compatible API"),
+    ] = None,
+    cache_path: Annotated[
+        Optional[str],
+        typer.Option("--cache-path", help="Path to SQLite cache file"),
+    ] = None,
+    no_cache: Annotated[
+        bool,
+        typer.Option("--no-cache", help="Disable caching"),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
+) -> None:
+    """
+    Generate a platform-specific search query from natural language.
+
+    Supported platforms:
+    - pubmed: PubMed/MEDLINE (default)
+    - scholar: Google Scholar
+    - wos: Web of Science (aliases: web_of_science, world_of_knowledge)
+
+    Examples:
+        paper gen-query "CRISPR gene editing for cancer therapy"
+        paper gen-query "single cell RNA velocity" --platform scholar
+        paper gen-query "machine learning drug discovery" --platform wos --format md
+    """
+    import asyncio
+    from papercli.config import Settings
+    from papercli.query import PLATFORM_ALIASES, VALID_PLATFORMS
+
+    # Validate platform
+    normalized_platform = PLATFORM_ALIASES.get(platform.lower(), platform.lower())
+    if normalized_platform not in VALID_PLATFORMS:
+        console.print(
+            f"[red]Error:[/red] Unknown platform '{platform}'. "
+            f"Valid platforms: {', '.join(sorted(VALID_PLATFORMS))} "
+            f"(aliases: {', '.join(sorted(PLATFORM_ALIASES.keys()))})"
+        )
+        raise typer.Exit(1)
+
+    # Validate output format
+    if output_format not in ("table", "json", "md"):
+        console.print("[red]Error:[/red] --format must be one of: table, json, md")
+        raise typer.Exit(1)
+
+    # Build settings
+    settings = Settings(
+        intent_model=intent_model,
+        llm_base_url=llm_base_url,
+        cache_path=cache_path,
+        cache_enabled=not no_cache,
+    )
+
+    # Run the generation
+    try:
+        result = asyncio.run(
+            _run_gen_query(
+                query=query,
+                platform=normalized_platform,
+                settings=settings,
+                verbose=verbose,
+                quiet=quiet,
+            )
+        )
+
+        # Output result
+        from papercli.output import format_query_output
+        output = format_query_output(result, output_format)
+        console.print(output)
+
+    except Exception as e:
+        if verbose:
+            console.print_exception()
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+async def _run_gen_query(
+    query: str,
+    platform: str,
+    settings: "Settings",
+    verbose: bool = False,
+    quiet: bool = False,
+) -> "PlatformQueryResult":
+    """Run the platform query generation."""
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    from papercli.cache import Cache
+    from papercli.llm import LLMClient
+    from papercli.models import PlatformQueryResult
+    from papercli.query import generate_platform_query
+
+    # Initialize components
+    cache = Cache(settings.cache_path) if settings.cache_enabled else None
+    llm = LLMClient(settings)
+
+    show_progress = not quiet
+
+    platform_display = {
+        "pubmed": "PubMed",
+        "scholar": "Google Scholar",
+        "wos": "Web of Science",
+    }.get(platform, platform.upper())
+
+    # Generate with progress spinner
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        disable=not show_progress,
+        transient=True,
+    ) as progress:
+        task = progress.add_task(f"[cyan]Generating {platform_display} query...", total=None)
+        result = await generate_platform_query(query, platform, llm, cache)
+        progress.update(task, description=f"[green]✓ Query generated for {platform_display}")
+
+    if verbose and show_progress:
+        console.print(f"[dim]Intent model: {settings.get_intent_model()}[/dim]")
+        console.print(f"[dim]LLM base URL: {settings.llm.base_url}[/dim]")
+        console.print()
+
+    return result
+
+
 if __name__ == "__main__":
     app()
 

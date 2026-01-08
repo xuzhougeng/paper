@@ -156,6 +156,7 @@ class LLMClient:
 
             # Parse JSON from response
             parsed = self._extract_json(response_text)
+            parsed = self._normalize_parsed_json(parsed)
             return response_model.model_validate(parsed)
 
         except (json.JSONDecodeError, ValueError) as e:
@@ -185,6 +186,7 @@ class LLMClient:
                 raw_responses.append(response_text)
 
                 parsed = self._extract_json(response_text)
+                parsed = self._normalize_parsed_json(parsed)
                 return response_model.model_validate(parsed)
 
             except (json.JSONDecodeError, ValueError) as retry_error:
@@ -227,6 +229,81 @@ class LLMClient:
             temperature=temperature,
             max_tokens=max_tokens,
         )
+
+    def _looks_like_schema_dict(self, d: dict) -> bool:
+        """Heuristic to detect JSON Schema-ish dicts returned by some models/proxies."""
+        schema_keys = {
+            "type",
+            "title",
+            "description",
+            "properties",
+            "items",
+            "required",
+            "anyOf",
+            "allOf",
+            "oneOf",
+            "$defs",
+            "$ref",
+        }
+        return any(k in d for k in schema_keys)
+
+    def _normalize_schema_echo_value(self, v: Any) -> tuple[bool, Any]:
+        """
+        Normalize values that look like schema-echo structures.
+
+        Returns:
+            (include, normalized_value)
+            - include=False means "skip this key" (likely schema metadata, not data)
+        """
+        if isinstance(v, dict):
+            # Common schema-echo pattern: {"type": "...", "value": ...}
+            if "value" in v:
+                return True, v["value"]
+            # If it still looks like schema, skip to avoid validation errors.
+            if self._looks_like_schema_dict(v):
+                return False, None
+        return True, v
+
+    def _normalize_parsed_json(self, parsed: Any) -> Any:
+        """
+        Normalize parsed JSON before Pydantic validation.
+
+        Some LLMs/proxies return a schema-like wrapper:
+          {"description": "...", "properties": {"field": {"value": ...}}}
+        or:
+          {"description": "...", "properties": {"field": ...}}
+
+        This function unwraps such responses into a plain object:
+          {"field": ...}
+        """
+        if not isinstance(parsed, dict):
+            return parsed
+
+        # Unwrap top-level schema echo wrapper
+        if (
+            "properties" in parsed
+            and isinstance(parsed.get("properties"), dict)
+            and self._looks_like_schema_dict(parsed)
+        ):
+            out: dict[str, Any] = {}
+            for k, v in parsed["properties"].items():
+                include, normalized = self._normalize_schema_echo_value(v)
+                if include:
+                    out[k] = normalized
+            return out
+
+        # Unwrap per-field {"value": ...} shapes, and drop schema-ish nested dicts.
+        out: dict[str, Any] = {}
+        changed = False
+        for k, v in parsed.items():
+            include, normalized = self._normalize_schema_echo_value(v)
+            if not include:
+                changed = True
+                continue
+            if normalized is not v:
+                changed = True
+            out[k] = normalized
+        return out if changed else parsed
 
     def _extract_json(self, text: str) -> dict:
         """Extract JSON from text, handling markdown code blocks."""
