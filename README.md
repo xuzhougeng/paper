@@ -65,14 +65,17 @@ paper find "CRISPR gene editing for cancer therapy"
 ### With options
 
 ```bash
-# Return top 5 results in JSON format
-paper find "machine learning for drug discovery" --top-n 5 --format json
+# Return top 10 results in JSON format
+paper find "machine learning for drug discovery" --top-n 10 --format json
 
 # Search only PubMed and OpenAlex
 paper find "protein folding prediction" --sources pubmed,openalex
 
 # Use specific models
 paper find "neural networks" --intent-model gpt-4o-mini --eval-model gpt-4o
+
+# Show all retrieved papers (skip LLM ranking)
+paper find "CRISPR therapy" --show-all
 
 # Verbose output
 paper find "single cell RNA sequencing" --verbose

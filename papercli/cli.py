@@ -35,7 +35,7 @@ def main(
 @app.command()
 def find(
     query: Annotated[str, typer.Argument(help="Your search query (a sentence describing what you're looking for)")],
-    top_n: Annotated[int, typer.Option("--top-n", "-n", help="Number of top results to return")] = 3,
+    top_n: Annotated[int, typer.Option("--top-n", "-n", help="Number of top results to return")] = 5,
     sources: Annotated[
         str,
         typer.Option("--sources", "-s", help="Comma-separated list of sources: pubmed,openalex,scholar,arxiv"),
@@ -43,11 +43,11 @@ def find(
     max_per_source: Annotated[
         int,
         typer.Option("--max-per-source", help="Maximum papers to fetch per source"),
-    ] = 20,
+    ] = 50,
     prefilter_k: Annotated[
         int,
         typer.Option("--prefilter-k", help="Number of candidates to send to LLM for reranking"),
-    ] = 20,
+    ] = 30,
     intent_model: Annotated[
         Optional[str],
         typer.Option("--intent-model", help="Model for query rewriting/intent extraction"),
@@ -79,6 +79,10 @@ def find(
     quiet: Annotated[
         bool,
         typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
+    show_all: Annotated[
+        bool,
+        typer.Option("--show-all", "-a", help="Show all retrieved papers (before LLM reranking)"),
     ] = False,
 ) -> None:
     """
@@ -123,11 +127,14 @@ def find(
             settings=settings,
             verbose=verbose,
             quiet=quiet,
+            show_all=show_all,
         )
 
         # Output results
         from papercli.output import format_output
-        output = format_output(results, output_format, top_n)
+        # When show_all, display all results; otherwise use top_n
+        display_n = len(results) if show_all else top_n
+        output = format_output(results, output_format, display_n, show_all=show_all)
         console.print(output)
 
     except Exception as e:

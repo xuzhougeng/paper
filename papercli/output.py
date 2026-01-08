@@ -16,6 +16,7 @@ def format_output(
     results: list[EvalResult],
     format: Literal["table", "json", "md"],
     top_n: int = 3,
+    show_all: bool = False,
 ) -> str | Table | Group:
     """
     Format evaluation results for output.
@@ -24,6 +25,7 @@ def format_output(
         results: List of evaluation results
         format: Output format (table, json, md)
         top_n: Number of top results to show
+        show_all: If True, display all papers without LLM evaluation details
 
     Returns:
         Formatted output (string for json/md, Rich object for table)
@@ -35,42 +37,49 @@ def format_output(
         return ""  # Empty results handled by pipeline
 
     if format == "json":
-        return _format_json(results)
+        return _format_json(results, show_all)
     elif format == "md":
-        return _format_markdown(results)
+        return _format_markdown(results, show_all)
     else:  # table
-        return _format_table(results)
+        return _format_table(results, show_all)
 
 
-def _format_json(results: list[EvalResult]) -> str:
+def _format_json(results: list[EvalResult], show_all: bool = False) -> str:
     """Format results as JSON."""
     output = []
     for i, result in enumerate(results, 1):
         paper = result.paper
-        output.append({
+        item = {
             "rank": i,
             "title": paper.title,
-            "score": result.score,
-            "meets_need": result.meets_need,
-            "evidence": {
-                "quote": result.evidence_quote,
-                "field": result.evidence_field,
-            },
-            "reason": result.short_reason,
             "year": paper.year,
             "authors": paper.authors[:5],  # Limit authors
             "venue": paper.venue,
             "doi": paper.doi,
             "url": paper.url,
             "source": paper.source,
-        })
+            "abstract": paper.abstract[:500] if paper.abstract else None,
+        }
+        # Include LLM evaluation details only when not show_all
+        if not show_all:
+            item.update({
+                "score": result.score,
+                "meets_need": result.meets_need,
+                "evidence": {
+                    "quote": result.evidence_quote,
+                    "field": result.evidence_field,
+                },
+                "reason": result.short_reason,
+            })
+        output.append(item)
 
     return json.dumps(output, indent=2, ensure_ascii=False)
 
 
-def _format_markdown(results: list[EvalResult]) -> str:
+def _format_markdown(results: list[EvalResult], show_all: bool = False) -> str:
     """Format results as Markdown."""
-    lines = ["# Search Results\n"]
+    title = "# All Retrieved Papers\n" if show_all else "# Search Results\n"
+    lines = [title]
 
     for i, result in enumerate(results, 1):
         paper = result.paper
@@ -88,19 +97,29 @@ def _format_markdown(results: list[EvalResult]) -> str:
             meta_parts.append(f"**Authors:** {authors_str}")
         if paper.venue:
             meta_parts.append(f"**Venue:** {paper.venue}")
+        meta_parts.append(f"**Source:** {paper.source}")
 
         if meta_parts:
             lines.append(" | ".join(meta_parts) + "\n")
 
-        # Score
-        lines.append(f"**Relevance Score:** {result.score:.1f}/10\n")
+        # LLM evaluation details (only when not show_all)
+        if not show_all:
+            # Score
+            lines.append(f"**Relevance Score:** {result.score:.1f}/10\n")
 
-        # Evidence
-        lines.append(f"> {result.evidence_quote}\n")
-        lines.append(f"*— from {result.evidence_field}*\n")
+            # Evidence
+            lines.append(f"> {result.evidence_quote}\n")
+            lines.append(f"*— from {result.evidence_field}*\n")
 
-        # Reason
-        lines.append(f"**Why relevant:** {result.short_reason}\n")
+            # Reason
+            lines.append(f"**Why relevant:** {result.short_reason}\n")
+        else:
+            # Show abstract for show_all mode
+            if paper.abstract:
+                abstract_preview = paper.abstract[:300]
+                if len(paper.abstract) > 300:
+                    abstract_preview += "..."
+                lines.append(f"> {abstract_preview}\n")
 
         # Links
         links = []
@@ -117,7 +136,7 @@ def _format_markdown(results: list[EvalResult]) -> str:
     return "\n".join(lines)
 
 
-def _format_table(results: list[EvalResult]) -> Group:
+def _format_table(results: list[EvalResult], show_all: bool = False) -> Group:
     """Format results as Rich table with panels."""
     panels = []
 
@@ -127,14 +146,15 @@ def _format_table(results: list[EvalResult]) -> Group:
         # Build content
         content = []
 
-        # Score line
-        score_text = Text()
-        score_text.append("Score: ", style="bold")
-        score_color = "green" if result.score >= 7 else "yellow" if result.score >= 4 else "red"
-        score_text.append(f"{result.score:.1f}/10", style=score_color)
-        if result.meets_need:
-            score_text.append(" ✓ Meets need", style="green")
-        content.append(score_text)
+        if not show_all:
+            # Score line (only when LLM evaluated)
+            score_text = Text()
+            score_text.append("Score: ", style="bold")
+            score_color = "green" if result.score >= 7 else "yellow" if result.score >= 4 else "red"
+            score_text.append(f"{result.score:.1f}/10", style=score_color)
+            if result.meets_need:
+                score_text.append(" ✓ Meets need", style="green")
+            content.append(score_text)
 
         # Metadata
         meta_parts = []
@@ -148,27 +168,39 @@ def _format_table(results: list[EvalResult]) -> Group:
         if paper.venue:
             venue_short = paper.venue[:40] + "..." if len(paper.venue or "") > 40 else paper.venue
             meta_parts.append(venue_short)
+        meta_parts.append(f"[{paper.source}]")
 
         if meta_parts:
             meta_text = Text(" | ".join(meta_parts), style="dim")
             content.append(meta_text)
 
-        # Evidence quote
-        evidence_text = Text()
-        evidence_text.append("\n\"", style="dim")
-        quote = result.evidence_quote[:150]
-        if len(result.evidence_quote) > 150:
-            quote += "..."
-        evidence_text.append(quote, style="italic cyan")
-        evidence_text.append("\"", style="dim")
-        evidence_text.append(f" — {result.evidence_field}", style="dim")
-        content.append(evidence_text)
+        if not show_all:
+            # Evidence quote (only when LLM evaluated)
+            evidence_text = Text()
+            evidence_text.append("\n\"", style="dim")
+            quote = result.evidence_quote[:150]
+            if len(result.evidence_quote) > 150:
+                quote += "..."
+            evidence_text.append(quote, style="italic cyan")
+            evidence_text.append("\"", style="dim")
+            evidence_text.append(f" — {result.evidence_field}", style="dim")
+            content.append(evidence_text)
 
-        # Reason
-        reason_text = Text()
-        reason_text.append("\n")
-        reason_text.append(result.short_reason, style="dim")
-        content.append(reason_text)
+            # Reason
+            reason_text = Text()
+            reason_text.append("\n")
+            reason_text.append(result.short_reason, style="dim")
+            content.append(reason_text)
+        else:
+            # Show abstract preview for show_all mode
+            if paper.abstract:
+                abstract_text = Text()
+                abstract_text.append("\n")
+                abstract_preview = paper.abstract[:200]
+                if len(paper.abstract) > 200:
+                    abstract_preview += "..."
+                abstract_text.append(abstract_preview, style="dim")
+                content.append(abstract_text)
 
         # URL
         if paper.url:
@@ -191,7 +223,7 @@ def _format_table(results: list[EvalResult]) -> Group:
             Group(*content),
             title=f"[bold]{i}. {title_short}[/bold]",
             title_align="left",
-            border_style="blue" if result.meets_need else "dim",
+            border_style="blue" if (not show_all and result.meets_need) else "dim",
             padding=(0, 1),
         )
         panels.append(panel)

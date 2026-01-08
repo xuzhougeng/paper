@@ -25,6 +25,7 @@ def run_pipeline(
     settings: "Settings",
     verbose: bool = False,
     quiet: bool = False,
+    show_all: bool = False,
 ) -> list[EvalResult]:
     """
     Run the full paper search pipeline.
@@ -34,8 +35,8 @@ def run_pipeline(
     2. Multi-source search
     3. Normalize and deduplicate
     4. Coarse ranking to prefilter_k
-    5. LLM reranking with evidence extraction
-    6. Return top_n results
+    5. LLM reranking with evidence extraction (skipped if show_all=True)
+    6. Return top_n results (or all if show_all=True)
     """
     return asyncio.run(
         _run_pipeline_async(
@@ -47,6 +48,7 @@ def run_pipeline(
             settings=settings,
             verbose=verbose,
             quiet=quiet,
+            show_all=show_all,
         )
     )
 
@@ -136,6 +138,7 @@ async def _run_pipeline_async(
     settings: "Settings",
     verbose: bool = False,
     quiet: bool = False,
+    show_all: bool = False,
 ) -> list[EvalResult]:
     """Async implementation of the pipeline."""
     from papercli.cache import Cache
@@ -232,38 +235,64 @@ async def _run_pipeline_async(
 
         # Step 4: Coarse ranking (60% -> 70%)
         progress.update(main_task, description="[cyan]Step 4/5: Ranking candidates...")
-        candidates = coarse_rank(papers, intent, k=prefilter_k)
+        # When show_all, rank all papers but don't limit to prefilter_k
+        rank_k = len(papers) if show_all else prefilter_k
+        candidates = coarse_rank(papers, intent, k=rank_k)
         progress.update(main_task, completed=70)
 
         if verbose:
             console.print(f"  [dim]→ Selected top {len(candidates)} candidates for evaluation[/dim]")
 
-        # Step 5: LLM reranking (70% -> 95%)
-        progress.update(main_task, description=f"[cyan]Step 5/5: Evaluating {len(candidates)} papers with LLM...")
-        results = await rerank_with_llm(
-            query, candidates, llm, cache,
-            progress_callback=lambda i, total: progress.update(
-                main_task,
-                completed=70 + int(25 * i / total),
-                description=f"[cyan]Step 5/5: Evaluating paper {i}/{total}..."
+        if show_all:
+            # Skip LLM reranking - convert papers to EvalResult with placeholder values
+            progress.update(main_task, description="[cyan]Step 5/5: Preparing all results...")
+            results = [
+                EvalResult(
+                    paper=paper,
+                    score=0.0,
+                    meets_need=False,
+                    evidence_quote="",
+                    evidence_field="",
+                    short_reason="(LLM evaluation skipped with --show-all)",
+                )
+                for paper in candidates
+            ]
+            progress.update(main_task, completed=95)
+            final_results = results  # Return all
+        else:
+            # Step 5: LLM reranking (70% -> 95%)
+            progress.update(main_task, description=f"[cyan]Step 5/5: Evaluating {len(candidates)} papers with LLM...")
+            results = await rerank_with_llm(
+                query, candidates, llm, cache,
+                progress_callback=lambda i, total: progress.update(
+                    main_task,
+                    completed=70 + int(25 * i / total),
+                    description=f"[cyan]Step 5/5: Evaluating paper {i}/{total}..."
+                )
             )
-        )
-        progress.update(main_task, completed=95)
+            progress.update(main_task, completed=95)
 
-        # Step 6: Return top_n (100%)
+            # Step 6: Return top_n (100%)
+            results = sorted(results, key=lambda r: r.score, reverse=True)
+            final_results = results[:top_n]
+
         progress.update(main_task, description="[cyan]Finalizing results...")
-        results = sorted(results, key=lambda r: r.score, reverse=True)
-        final_results = results[:top_n]
         progress.update(main_task, completed=100, description="[green]✓ Search complete!")
 
     # Print summary
     if show_progress:
-        meets_need_count = sum(1 for r in final_results if r.meets_need)
-        console.print(
-            f"\n[dim]Found [bold]{len(final_results)}[/bold] relevant papers "
-            f"([green]{meets_need_count}[/green] highly relevant) "
-            f"from {len(papers)} candidates[/dim]\n"
-        )
+        if show_all:
+            console.print(
+                f"\n[dim]Showing all [bold]{len(final_results)}[/bold] papers "
+                f"from {len(papers)} candidates (LLM evaluation skipped)[/dim]\n"
+            )
+        else:
+            meets_need_count = sum(1 for r in final_results if r.meets_need)
+            console.print(
+                f"\n[dim]Found [bold]{len(final_results)}[/bold] relevant papers "
+                f"([green]{meets_need_count}[/green] highly relevant) "
+                f"from {len(papers)} candidates[/dim]\n"
+            )
 
     return final_results
 
