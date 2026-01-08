@@ -177,6 +177,14 @@ def _format_table(results: list[EvalResult]) -> Group:
             url_text.append(paper.url, style="link dim blue")
             content.append(url_text)
 
+        # DOI
+        if paper.doi:
+            doi_text = Text()
+            doi_text.append("\n")
+            doi_text.append("DOI: ", style="dim")
+            doi_text.append(paper.doi, style=f"dim cyan link https://doi.org/{paper.doi}")
+            content.append(doi_text)
+
         # Create panel
         title_short = paper.title[:80] + "..." if len(paper.title) > 80 else paper.title
         panel = Panel(
