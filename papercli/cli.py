@@ -623,6 +623,96 @@ def extract(
         raise typer.Exit(1)
 
 
+@app.command()
+def structure(
+    jsonl_path: Annotated[
+        str,
+        typer.Argument(
+            help="Path to page-level JSONL produced by `paper extract` (e.g., result.jsonl)"
+        ),
+    ],
+    out: Annotated[
+        Optional[str],
+        typer.Option("--out", "-o", help="Output file path (default: stdout)"),
+    ] = None,
+    output_format: Annotated[
+        Optional[str],
+        typer.Option("--format", "-f", help="Output format: json or md (default: infer from --out, else json)"),
+    ] = None,
+    pretty: Annotated[
+        bool,
+        typer.Option("--pretty/--no-pretty", help="Pretty-print JSON output"),
+    ] = True,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+) -> None:
+    """
+    Second-pass parsing: turn `result.jsonl` into database-friendly structured fields.
+
+    Outputs a single JSON object with fields like:
+    - title, abstract, methods, results, references, appendix
+    - main_figures/main_tables and supp_figures/supp_tables
+
+    Example:
+        paper structure result.jsonl --out structured.json
+    """
+    import json
+    from pathlib import Path
+    import sys
+
+    from papercli.structure import structure_from_jsonl_path
+
+    try:
+        structured = structure_from_jsonl_path(jsonl_path)
+
+        fmt = (output_format or "").strip().lower() or None
+        if fmt is None:
+            if out:
+                suffix = Path(out).suffix.lower()
+                if suffix in {".md", ".markdown"}:
+                    fmt = "md"
+                else:
+                    fmt = "json"
+            else:
+                fmt = "json"
+
+        if fmt not in ("json", "md"):
+            console.print("[red]Error:[/red] --format must be one of: json, md")
+            raise typer.Exit(1)
+
+        if fmt == "json":
+            payload = structured.model_dump()
+            text = json.dumps(payload, ensure_ascii=False, indent=2 if pretty else None)
+        else:
+            from papercli.structure import structured_paper_to_markdown
+
+            text = structured_paper_to_markdown(structured)
+
+        if out:
+            out_path = Path(out)
+            out_path.write_text(text + ("\n" if not text.endswith("\n") else ""), encoding="utf-8")
+            console.print(f"[green]✓ Wrote structured output to {out_path}[/green]")
+        else:
+            sys.stdout.write(text)
+            if not text.endswith("\n"):
+                sys.stdout.write("\n")
+            sys.stdout.flush()
+
+        if verbose and structured.warnings:
+            console.print("\n[bold yellow]Warnings:[/bold yellow]")
+            for w in structured.warnings:
+                console.print(f"- {w}")
+
+    except Exception as e:
+        if verbose:
+            console.print_exception()
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
 async def _run_extract(
     pdf_path: "Path",
     out: str | None,

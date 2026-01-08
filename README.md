@@ -97,6 +97,18 @@ paper find "single cell RNA sequencing" --verbose
 - `json`: JSON output for programmatic use
 - `md`: Markdown format
 
+#### How it works
+
+![How PaperCLI Works](assets/workflow.png)
+
+1. **Query Intent Extraction**: LLM analyzes your query to extract keywords, synonyms, and search intent
+2. **Multi-source Search**: Searches PubMed, OpenAlex, Scholar, and optionally arXiv in parallel
+3. **Deduplication**: Removes duplicate papers using DOI, source IDs, and normalized titles
+4. **Coarse Ranking**: Uses lexical matching to reduce candidates to a manageable number
+5. **LLM Reranking**: Each candidate is evaluated by LLM for relevance, with evidence extraction
+6. **Top-N Output**: Returns the most relevant papers with supporting evidence
+
+
 ### Generate platform-specific search queries
 
 Use `gen-query` to generate an optimized search query for a specific database platform without actually searching. This is useful when you want to run the search manually or refine the query.
@@ -157,16 +169,18 @@ Options:
 - `--verbose/-V`: Show detailed progress
 - `--quiet/-q`: Suppress progress output
 
-## How it works
+### Structure `result.jsonl` for database ingestion
 
-![How PaperCLI Works](assets/workflow.png)
+`paper structure` performs a **second-pass parse** on the page-level JSONL produced by `paper extract`, and outputs a single structured JSON object with fields like title/abstract/methods/results and main vs supplementary figures/tables.
 
-1. **Query Intent Extraction**: LLM analyzes your query to extract keywords, synonyms, and search intent
-2. **Multi-source Search**: Searches PubMed, OpenAlex, Scholar, and optionally arXiv in parallel
-3. **Deduplication**: Removes duplicate papers using DOI, source IDs, and normalized titles
-4. **Coarse Ranking**: Uses lexical matching to reduce candidates to a manageable number
-5. **LLM Reranking**: Each candidate is evaluated by LLM for relevance, with evidence extraction
-6. **Top-N Output**: Returns the most relevant papers with supporting evidence
+```bash
+# Turn result.jsonl into a single structured JSON document
+paper structure result.jsonl --out structured.json
+
+# Or output a Markdown report for easier reading
+paper structure result.jsonl --out structured.md
+# (equivalent) paper structure result.jsonl --format md --out structured.md
+```
 
 ## License
 
