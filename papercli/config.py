@@ -37,6 +37,14 @@ class Doc2XConfig(BaseModel):
     max_wait: float = Field(default=900.0)  # Max wait time (15 min default)
 
 
+class UnpaywallConfig(BaseModel):
+    """Unpaywall API configuration for PDF fetching."""
+
+    base_url: str = Field(default="https://api.unpaywall.org/v2")
+    email: Optional[str] = Field(default=None)  # Required for polite pool
+    timeout: float = Field(default=30.0)
+
+
 class APIKeysConfig(BaseModel):
     """API keys configuration."""
 
@@ -52,6 +60,7 @@ class Settings(BaseModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     api_keys: APIKeysConfig = Field(default_factory=APIKeysConfig)
     doc2x: Doc2XConfig = Field(default_factory=Doc2XConfig)
+    unpaywall: UnpaywallConfig = Field(default_factory=UnpaywallConfig)
 
     # CLI overrides (set directly from command line)
     intent_model: Optional[str] = Field(default=None)
@@ -99,6 +108,10 @@ class Settings(BaseModel):
             self.doc2x.api_key = doc2x_api_key
         if doc2x_base_url := os.environ.get("DOC2X_BASE_URL"):
             self.doc2x.base_url = doc2x_base_url
+
+        # Unpaywall configuration
+        if unpaywall_email := os.environ.get("UNPAYWALL_EMAIL"):
+            self.unpaywall.email = unpaywall_email
 
     def _load_from_config_file(self) -> None:
         """Load configuration from config file (~/.papercli.toml)."""
@@ -159,6 +172,14 @@ class Settings(BaseModel):
             if "max_wait" in doc2x_config:
                 self.doc2x.max_wait = doc2x_config["max_wait"]
 
+        if unpaywall_config := config_data.get("unpaywall"):
+            if "email" in unpaywall_config and not self.unpaywall.email:
+                self.unpaywall.email = unpaywall_config["email"]
+            if "base_url" in unpaywall_config:
+                self.unpaywall.base_url = unpaywall_config["base_url"]
+            if "timeout" in unpaywall_config:
+                self.unpaywall.timeout = unpaywall_config["timeout"]
+
     def _apply_cli_overrides(self) -> None:
         """Apply CLI-provided overrides."""
         if self.intent_model:
@@ -205,4 +226,18 @@ class Settings(BaseModel):
                 "or add [doc2x] api_key = '...' to your config file."
             )
         return self.doc2x.api_key
+
+    def get_unpaywall_email(self) -> str:
+        """Get Unpaywall email or raise error."""
+        if not self.unpaywall.email:
+            raise ValueError(
+                "Unpaywall email not configured. Set UNPAYWALL_EMAIL environment variable "
+                "or add [unpaywall] email = '...' to your config file. "
+                "This is required for Unpaywall's polite pool access."
+            )
+        return self.unpaywall.email
+
+    def get_ncbi_api_key(self) -> Optional[str]:
+        """Get NCBI API key (optional, improves rate limits)."""
+        return self.api_keys.ncbi_api_key
 

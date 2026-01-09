@@ -719,6 +719,227 @@ def structure(
         raise typer.Exit(1)
 
 
+@app.command("fetch-pdf")
+def fetch_pdf(
+    doi: Annotated[str, typer.Argument(help="DOI to fetch PDF for (e.g., 10.1038/nature12373)")],
+    out_dir: Annotated[
+        str,
+        typer.Option("--out-dir", "-d", help="Directory to save PDF (default: current directory)"),
+    ] = ".",
+    filename: Annotated[
+        Optional[str],
+        typer.Option("--filename", "-f", help="Output filename (default: {doi_safe}.pdf)"),
+    ] = None,
+    skip_unpaywall: Annotated[
+        bool,
+        typer.Option("--skip-unpaywall", help="Skip Unpaywall lookup (use PMC only)"),
+    ] = False,
+    skip_pmc: Annotated[
+        bool,
+        typer.Option("--skip-pmc", help="Skip PMC fallback (use Unpaywall only)"),
+    ] = False,
+    no_download: Annotated[
+        bool,
+        typer.Option("--no-download", help="Only show PDF URL, don't download"),
+    ] = False,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format for metadata: json or table"),
+    ] = "table",
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
+) -> None:
+    """
+    Fetch PDF for a DOI using Unpaywall and PMC.
+
+    Searches Unpaywall first for open access PDFs, then falls back to
+    PubMed Central (PMC) if no direct PDF link is found.
+
+    Requires UNPAYWALL_EMAIL environment variable or [unpaywall] email
+    in config file for Unpaywall API access.
+
+    Examples:
+        paper fetch-pdf 10.1038/nature12373
+        paper fetch-pdf "10.1038/s41586-023-06291-2" --out-dir ./pdfs
+        paper fetch-pdf 10.1000/xyz123 --no-download --format json
+    """
+    import asyncio
+
+    from papercli.config import Settings
+
+    # Validate output format
+    if output_format not in ("table", "json"):
+        console.print("[red]Error:[/red] --format must be one of: table, json")
+        raise typer.Exit(1)
+
+    # Build settings
+    settings = Settings()
+
+    # Validate Unpaywall email early (unless skipping)
+    if not skip_unpaywall:
+        try:
+            settings.get_unpaywall_email()
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(1)
+
+    # Run the fetch
+    try:
+        asyncio.run(
+            _run_fetch_pdf(
+                doi=doi,
+                out_dir=out_dir,
+                filename=filename,
+                skip_unpaywall=skip_unpaywall,
+                skip_pmc=skip_pmc,
+                no_download=no_download,
+                output_format=output_format,
+                settings=settings,
+                verbose=verbose,
+                quiet=quiet,
+            )
+        )
+    except Exception as e:
+        if verbose:
+            console.print_exception()
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+async def _run_fetch_pdf(
+    doi: str,
+    out_dir: str,
+    filename: str | None,
+    skip_unpaywall: bool,
+    skip_pmc: bool,
+    no_download: bool,
+    output_format: str,
+    settings: "Settings",
+    verbose: bool = False,
+    quiet: bool = False,
+) -> None:
+    """Run the PDF fetch workflow."""
+    import json
+    from pathlib import Path
+
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.table import Table
+
+    from papercli.pdf_fetch import (
+        fetch_pdf_url,
+        download_pdf,
+        doi_to_filename,
+        validate_doi,
+        PDFFetchError,
+    )
+
+    show_progress = not quiet
+
+    # Validate DOI
+    try:
+        normalized_doi = validate_doi(doi)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    if verbose and show_progress:
+        console.print(f"[dim]DOI: {normalized_doi}[/dim]")
+        console.print(f"[dim]Unpaywall: {'skip' if skip_unpaywall else 'enabled'}[/dim]")
+        console.print(f"[dim]PMC fallback: {'skip' if skip_pmc else 'enabled'}[/dim]")
+        console.print()
+
+    # Fetch PDF URL
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        disable=not show_progress,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("[cyan]Looking up PDF URL...", total=None)
+
+        result = await fetch_pdf_url(
+            doi=normalized_doi,
+            settings=settings,
+            skip_unpaywall=skip_unpaywall,
+            skip_pmc=skip_pmc,
+        )
+
+        if result.pdf_url:
+            progress.update(task, description=f"[green]✓ Found PDF via {result.source}")
+        else:
+            progress.update(task, description="[yellow]⚠ No direct PDF found")
+
+    # Display result
+    if output_format == "json":
+        output = result.model_dump(exclude_none=True)
+        console.print(json.dumps(output, indent=2))
+    else:
+        # Table format
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Field", style="dim")
+        table.add_column("Value")
+
+        table.add_row("DOI", result.doi)
+        table.add_row("Source", result.source)
+
+        if result.pdf_url:
+            table.add_row("PDF URL", f"[green]{result.pdf_url}[/green]")
+        if result.landing_url:
+            table.add_row("Landing URL", result.landing_url)
+        if result.oa_status:
+            table.add_row("OA Status", result.oa_status)
+        if result.license:
+            table.add_row("License", result.license)
+        if result.pmid:
+            table.add_row("PMID", result.pmid)
+        if result.pmcid:
+            table.add_row("PMCID", result.pmcid)
+        if result.error:
+            table.add_row("Note", f"[yellow]{result.error}[/yellow]")
+
+        console.print(table)
+
+    # Download if we have a PDF URL and not --no-download
+    if result.pdf_url and not no_download:
+        out_path = Path(out_dir)
+        if filename:
+            pdf_path = out_path / filename
+        else:
+            pdf_path = out_path / doi_to_filename(normalized_doi)
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            disable=not show_progress,
+            transient=True,
+        ) as progress:
+            task = progress.add_task(f"[cyan]Downloading to {pdf_path}...", total=None)
+
+            try:
+                await download_pdf(result.pdf_url, pdf_path)
+                progress.update(task, description=f"[green]✓ Downloaded to {pdf_path}")
+                if show_progress:
+                    console.print(f"\n[green]✓ PDF saved to {pdf_path}[/green]")
+            except PDFFetchError as e:
+                progress.update(task, description=f"[red]✗ Download failed: {e}[/red]")
+                console.print(f"\n[red]Error downloading PDF:[/red] {e}")
+                raise typer.Exit(2)
+
+    elif not result.pdf_url:
+        if result.landing_url:
+            console.print(f"\n[yellow]No direct PDF available. Try visiting:[/yellow] {result.landing_url}")
+        raise typer.Exit(1)
+
+
 async def _run_extract(
     pdf_path: "Path",
     out: str | None,

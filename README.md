@@ -8,6 +8,7 @@ A command-line tool for searching academic papers using LLM-powered query unders
 - **LLM-powered query understanding**: Automatically extracts intent, expands synonyms, and translates queries
 - **Platform-specific query generation**: Generate optimized search queries for PubMed, Google Scholar, or Web of Science
 - **PDF text extraction**: Extract text from PDFs using Doc2X API with page-level JSONL output
+- **DOI-based PDF download**: Fetch open-access PDFs via Unpaywall and PubMed Central (PMC)
 - **Smart ranking**: Coarse lexical ranking followed by LLM-based relevance scoring
 - **Evidence extraction**: Returns the most relevant quote from each paper
 - **Configurable models**: Use different LLM models for intent extraction vs evaluation
@@ -43,6 +44,10 @@ export SERPAPI_API_KEY="your-serpapi-key"
 
 # Optional: Required for PDF extraction (paper extract command)
 export DOC2X_API_KEY="sk-..."  # Get from https://open.noedgeai.com
+
+# Optional: Required for PDF download by DOI (paper fetch-pdf command)
+export UNPAYWALL_EMAIL="your@email.com"  # Required for Unpaywall API
+export NCBI_API_KEY="your-ncbi-key"       # Optional, improves PMC rate limits
 ```
 
 注: PAPERCLI_INTENT_MODEL建议模型不能弱于gpt-4o。如果无法使用官方API，可以通过LLM_BASE_URL设置第三方代理。例如我用的是[CloseAI](https://referer.shadowai.xyz/r/12432)。
@@ -62,6 +67,12 @@ enabled = true
 [doc2x]
 api_key = "sk-..."  # Optional: for PDF extraction
 # base_url = "https://v2.doc2x.noedgeai.com"  # Default
+
+[unpaywall]
+email = "your@email.com"  # Required for PDF download by DOI
+
+[api_keys]
+ncbi_api_key = "..."  # Optional: improves PMC rate limits
 ```
 
 ## Usage
@@ -137,7 +148,7 @@ Supported platforms:
 
 Platform aliases: `google_scholar` → `scholar`, `web_of_science` / `world_of_knowledge` → `wos`
 
-### Extract text from PDF
+### Extract text from PDF[Experimental Feature]
 
 Use `extract` to parse a PDF file using [Doc2X](https://doc2x.noedgeai.com/) and output page-level JSONL. Each line contains one page with extracted text.
 
@@ -147,6 +158,9 @@ paper extract paper.pdf
 
 # Extract to a file
 paper extract paper.pdf --out result.jsonl
+
+# Download images to local directory (replaces CDN URLs with local paths)
+paper extract paper.pdf --image-dir ./images --out result.jsonl
 
 # Include raw page data (for debugging or further processing)
 paper extract paper.pdf --include-raw --out result.jsonl
@@ -163,6 +177,7 @@ Output JSONL format (one JSON object per line):
 
 Options:
 - `--out PATH`: Write output to file instead of stdout
+- `--image-dir PATH`: Download images to this directory and replace CDN URLs with local paths
 - `--poll-interval FLOAT`: Seconds between status polls (default: 2.0)
 - `--timeout FLOAT`: Maximum wait time in seconds (default: 900)
 - `--include-raw/--no-include-raw`: Include raw page data in output
@@ -181,6 +196,45 @@ paper structure result.jsonl --out structured.json
 paper structure result.jsonl --out structured.md
 # (equivalent) paper structure result.jsonl --format md --out structured.md
 ```
+
+### Download PDF by DOI
+
+Use `fetch-pdf` to download open-access PDFs using a DOI. The command first queries [Unpaywall](https://unpaywall.org/) for direct PDF links, then falls back to [PubMed Central (PMC)](https://pmc.ncbi.nlm.nih.gov/) if needed.
+
+```bash
+# Download PDF to current directory
+paper fetch-pdf 10.1038/nature12373
+
+# Specify output directory
+paper fetch-pdf "10.1038/s41586-023-06291-2" --out-dir ./pdfs
+
+# Custom filename
+paper fetch-pdf 10.1038/nature12373 --out-dir ./pdfs --filename paper.pdf
+
+# Only show PDF URL without downloading
+paper fetch-pdf 10.1000/xyz123 --no-download
+
+# Output metadata as JSON
+paper fetch-pdf 10.1038/nature12373 --no-download --format json
+
+# Skip Unpaywall, use PMC only
+paper fetch-pdf 10.1038/nature12373 --skip-unpaywall
+
+# Skip PMC fallback, use Unpaywall only
+paper fetch-pdf 10.1038/nature12373 --skip-pmc
+```
+
+Options:
+- `--out-dir PATH`: Directory to save PDF (default: current directory)
+- `--filename NAME`: Output filename (default: `{doi_safe}.pdf`)
+- `--no-download`: Only show PDF URL, don't download
+- `--skip-unpaywall`: Skip Unpaywall lookup (use PMC only)
+- `--skip-pmc`: Skip PMC fallback (use Unpaywall only)
+- `--format`: Output format for metadata: `table` (default) or `json`
+- `--verbose/-V`: Show detailed progress
+- `--quiet/-q`: Suppress progress output
+
+**Note**: Requires `UNPAYWALL_EMAIL` environment variable or `[unpaywall] email` in config file.
 
 ## License
 
