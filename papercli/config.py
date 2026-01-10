@@ -155,6 +155,8 @@ class Settings(BaseModel):
     def _merge_config(self, config_data: dict) -> None:
         """Merge config file data into settings."""
         if llm_config := config_data.get("llm"):
+            if "api_key" in llm_config and not self.llm.api_key:
+                self.llm.api_key = llm_config["api_key"]
             if "base_url" in llm_config and not self.llm_base_url:
                 self.llm.base_url = llm_config["base_url"]
             if "intent_model" in llm_config and not self.intent_model:

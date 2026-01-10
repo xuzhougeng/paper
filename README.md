@@ -65,6 +65,7 @@ Or create a `~/.papercli.toml` configuration file:
 
 ```toml
 [llm]
+api_key = "sk-..."  # Required: OpenAI or compatible API key
 base_url = "https://api.openai.com/v1"
 intent_model = "gpt-4o-mini"  # Default: gpt-4o-mini (for query rewriting)
 eval_model = "gpt-4o"          # Default: gpt-4o (for paper evaluation)
