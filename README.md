@@ -82,6 +82,7 @@ api_key = "sk-..."  # Optional: for PDF extraction
 email = "your@email.com"  # Required for PDF download by DOI
 
 [api_keys]
+serpapi_key = "..."  # Optional: required for Google Scholar search
 ncbi_api_key = "..."  # Optional: improves PMC rate limits
 
 [gemini]
@@ -251,6 +252,13 @@ Options:
 - `--quiet/-q`: Suppress progress output
 
 **Note**: Requires `UNPAYWALL_EMAIL` environment variable or `[unpaywall] email` in config file.
+
+If you get **HTTP 403 Forbidden** when downloading an OA PDF, the host may be blocking automated downloads (anti-bot). You can try overriding the default User-Agent:
+
+```bash
+export PAPERCLI_PDF_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+paper fetch-pdf 10.1101/2025.03.04.641200
+```
 
 ### Generate article highlight slides
 
