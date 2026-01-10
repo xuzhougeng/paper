@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import toml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class LLMConfig(BaseModel):
@@ -66,6 +66,8 @@ class GeminiConfig(BaseModel):
 
 class Settings(BaseModel):
     """Main settings container."""
+
+    _config_file_used: Optional[Path] = PrivateAttr(default=None)
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
@@ -148,9 +150,14 @@ class Settings(BaseModel):
                 try:
                     config_data = toml.load(config_path)
                     self._merge_config(config_data)
+                    self._config_file_used = config_path
                     break
                 except Exception:
                     pass  # Ignore invalid config files
+
+    def get_config_file_used(self) -> Optional[Path]:
+        """Return which config file path was loaded (if any)."""
+        return self._config_file_used
 
     def _merge_config(self, config_data: dict) -> None:
         """Merge config file data into settings."""

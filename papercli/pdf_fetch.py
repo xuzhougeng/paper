@@ -1,5 +1,6 @@
 """PDF fetching via Unpaywall and PMC APIs."""
 
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
@@ -423,7 +424,18 @@ async def download_pdf(
     # Ensure parent directory exists
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    user_agent = os.environ.get("PAPERCLI_PDF_USER_AGENT") or (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+    headers = {
+        # Some hosts (e.g., preprint servers) may block default http clients.
+        "User-Agent": user_agent,
+        "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
         try:
             response = await client.get(pdf_url)
             response.raise_for_status()
@@ -443,8 +455,18 @@ async def download_pdf(
             return out_path
 
         except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            reason = (getattr(e.response, "reason_phrase", None) or "").strip()
+            url = str(e.response.url)
+            if status == 403:
+                raise PDFFetchError(
+                    "HTTP 403 Forbidden downloading PDF. The host may be blocking automated downloads "
+                    f"(anti-bot). URL: {url}. "
+                    "Try setting PAPERCLI_PDF_USER_AGENT to a browser User-Agent, or download via the landing page.",
+                    source="download",
+                ) from e
             raise PDFFetchError(
-                f"HTTP error downloading PDF: {e.response.status_code}",
+                f"HTTP error downloading PDF: {status}{(' ' + reason) if reason else ''} (URL: {url})",
                 source="download",
             ) from e
         except httpx.RequestError as e:

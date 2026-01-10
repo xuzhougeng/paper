@@ -805,6 +805,9 @@ def fetch_pdf(
                 quiet=quiet,
             )
         )
+    except typer.Exit:
+        # Preserve intended exit code and avoid printing noisy "Error: <code>".
+        raise
     except Exception as e:
         if verbose:
             console.print_exception()
@@ -1139,10 +1142,22 @@ def slide(
         paper slide --in text.txt --bullets 3 --image-size 2K
     """
     import asyncio
+    import os
     from pathlib import Path
 
     from papercli.config import Settings
     from papercli.slide import VALID_STYLES
+
+    def _mask_secret(value: str | None) -> str:
+        """Mask secrets for debug output without leaking full values."""
+        if not value:
+            return "<unset>"
+        v = value.strip()
+        if not v:
+            return "<empty>"
+        if len(v) <= 8:
+            return f"{v[0]}***{v[-1]} (len={len(v)})"
+        return f"{v[:4]}…{v[-4:]} (len={len(v)})"
 
     # Validate style
     if style not in VALID_STYLES:
@@ -1187,6 +1202,17 @@ def slide(
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+
+    if verbose and not quiet:
+        cfg_path = settings.get_config_file_used()
+        console.print(f"[dim]Config file: {cfg_path if cfg_path else '<none>'}[/dim]")
+        console.print(
+            f"[dim]GEMINI_API_KEY env: {_mask_secret(os.environ.get('GEMINI_API_KEY'))}[/dim]"
+        )
+        console.print(
+            f"[dim]Gemini api_key (effective): {_mask_secret(settings.gemini.api_key)}[/dim]"
+        )
+        console.print()
 
     # Read input text
     try:
