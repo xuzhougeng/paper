@@ -1070,6 +1070,307 @@ async def _run_extract(
         await client.close()
 
 
+@app.command()
+def slide(
+    input_file: Annotated[
+        Optional[str],
+        typer.Option("--in", "-i", help="Input text file (reads from stdin if not provided)"),
+    ] = None,
+    out: Annotated[
+        str,
+        typer.Option("--out", "-o", help="Output PNG file path"),
+    ] = "slide.png",
+    style: Annotated[
+        str,
+        typer.Option("--style", "-s", help="Slide style: handdrawn, minimal, academic, dark, colorful"),
+    ] = "handdrawn",
+    bullets: Annotated[
+        int,
+        typer.Option("--bullets", "-b", help="Number of bullet points (1-8)"),
+    ] = 5,
+    aspect_ratio: Annotated[
+        str,
+        typer.Option("--aspect-ratio", help="Image aspect ratio: 16:9, 4:3, 1:1"),
+    ] = "16:9",
+    image_size: Annotated[
+        str,
+        typer.Option("--image-size", help="Image size: 1K, 2K, 4K"),
+    ] = "1K",
+    cache_path: Annotated[
+        Optional[str],
+        typer.Option("--cache-path", help="Path to SQLite cache file"),
+    ] = None,
+    no_cache: Annotated[
+        bool,
+        typer.Option("--no-cache", help="Disable caching"),
+    ] = False,
+    show_highlights: Annotated[
+        bool,
+        typer.Option("--show-highlights", help="Print extracted highlights to stdout"),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
+) -> None:
+    """
+    Generate a visual slide summarizing article highlights.
+
+    Reads text from a file or stdin, extracts key highlights using Gemini,
+    and generates a styled single-page slide image.
+
+    Styles:
+    - handdrawn: Hand-drawn sketch style with marker strokes
+    - minimal: Ultra-minimalist clean design
+    - academic: Professional academic poster style
+    - dark: Dark futuristic tech theme
+    - colorful: Vibrant and energetic design
+
+    Requires GEMINI_API_KEY environment variable or [gemini] section in config.
+
+    Examples:
+        paper slide --in article.txt --style handdrawn
+        paper slide --in paper.txt --out summary.png --style academic
+        cat article.txt | paper slide --style minimal
+        paper slide --in text.txt --bullets 3 --image-size 2K
+    """
+    import asyncio
+    from pathlib import Path
+
+    from papercli.config import Settings
+    from papercli.slide import VALID_STYLES
+
+    # Validate style
+    if style not in VALID_STYLES:
+        console.print(
+            f"[red]Error:[/red] Unknown style '{style}'. "
+            f"Valid styles: {', '.join(sorted(VALID_STYLES))}"
+        )
+        raise typer.Exit(1)
+
+    # Validate aspect ratio
+    valid_aspects = {"16:9", "4:3", "1:1"}
+    if aspect_ratio not in valid_aspects:
+        console.print(
+            f"[red]Error:[/red] Invalid aspect ratio '{aspect_ratio}'. "
+            f"Valid options: {', '.join(sorted(valid_aspects))}"
+        )
+        raise typer.Exit(1)
+
+    # Validate image size
+    valid_sizes = {"1K", "2K", "4K"}
+    if image_size not in valid_sizes:
+        console.print(
+            f"[red]Error:[/red] Invalid image size '{image_size}'. "
+            f"Valid options: {', '.join(sorted(valid_sizes))}"
+        )
+        raise typer.Exit(1)
+
+    # Validate bullets range
+    if not 1 <= bullets <= 8:
+        console.print("[red]Error:[/red] --bullets must be between 1 and 8")
+        raise typer.Exit(1)
+
+    # Build settings
+    settings = Settings(
+        cache_path=cache_path,
+        cache_enabled=not no_cache,
+    )
+
+    # Validate Gemini API key early
+    try:
+        settings.get_gemini_api_key()
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    # Read input text
+    try:
+        text = _read_slide_input(input_file)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to read input: {e}")
+        raise typer.Exit(1)
+
+    if not text.strip():
+        console.print("[red]Error:[/red] Input text is empty")
+        raise typer.Exit(1)
+
+    # Run the slide generation
+    try:
+        asyncio.run(
+            _run_slide(
+                text=text,
+                out=out,
+                style=style,
+                bullets=bullets,
+                aspect_ratio=aspect_ratio,
+                image_size=image_size,
+                settings=settings,
+                show_highlights=show_highlights,
+                verbose=verbose,
+                quiet=quiet,
+            )
+        )
+    except Exception as e:
+        if verbose:
+            console.print_exception()
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+def _read_slide_input(input_file: str | None) -> str:
+    """Read input text from file or stdin."""
+    import sys
+    from pathlib import Path
+
+    if input_file:
+        path = Path(input_file)
+        if not path.exists():
+            raise FileNotFoundError(f"Input file not found: {input_file}")
+        return path.read_text(encoding="utf-8")
+    else:
+        # Read from stdin
+        if sys.stdin.isatty():
+            raise ValueError(
+                "No input provided. Use --in to specify a file or pipe text to stdin."
+            )
+        return sys.stdin.read()
+
+
+async def _run_slide(
+    text: str,
+    out: str,
+    style: str,
+    bullets: int,
+    aspect_ratio: str,
+    image_size: str,
+    settings: "Settings",
+    show_highlights: bool = False,
+    verbose: bool = False,
+    quiet: bool = False,
+) -> None:
+    """Run the slide generation workflow."""
+    import json
+    from pathlib import Path
+
+    from rich.panel import Panel
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.text import Text
+
+    from papercli.cache import Cache
+    from papercli.gemini import GeminiClient, GeminiError
+    from papercli.slide import generate_slide
+
+    show_progress = not quiet
+
+    # Initialize components
+    cache = Cache(settings.cache_path) if settings.cache_enabled else None
+    client = GeminiClient(settings)
+
+    try:
+        if verbose and show_progress:
+            console.print(f"[dim]Gemini Base URL: {settings.gemini.base_url}[/dim]")
+            console.print(f"[dim]Text Model: {settings.gemini.text_model}[/dim]")
+            console.print(f"[dim]Image Model: {settings.gemini.image_model}[/dim]")
+            console.print(f"[dim]Style: {style}[/dim]")
+            console.print(f"[dim]Input length: {len(text)} chars[/dim]")
+            console.print()
+
+        # Progress tracking
+        current_status = ""
+
+        def on_progress(status: str) -> None:
+            nonlocal current_status
+            current_status = status
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            disable=not show_progress,
+            transient=True,
+        ) as progress:
+            # Step 1: Generate slide
+            task = progress.add_task("[cyan]Generating slide...", total=None)
+
+            image_bytes, highlights = await generate_slide(
+                text=text,
+                style=style,
+                client=client,
+                cache=cache,
+                num_bullets=bullets,
+                aspect_ratio=aspect_ratio,
+                image_size=image_size,
+                progress_callback=lambda s: progress.update(task, description=f"[cyan]{s}"),
+            )
+
+            progress.update(task, description="[green]✓ Slide generated")
+
+        # Write output file
+        out_path = Path(out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(image_bytes)
+
+        if show_progress:
+            console.print(f"[green]✓ Slide saved to {out_path}[/green]")
+            console.print(f"[dim]  Size: {len(image_bytes):,} bytes[/dim]")
+
+        # Show highlights if requested
+        if show_highlights:
+            console.print()
+            content = Text()
+            content.append("📌 ", style="bold")
+            content.append(f"{highlights.title}\n", style="bold cyan")
+            if highlights.subtitle:
+                content.append(f"   {highlights.subtitle}\n", style="dim")
+            content.append("\n")
+
+            for i, bullet in enumerate(highlights.bullets, 1):
+                content.append(f"  {i}. ", style="bold yellow")
+                content.append(f"{bullet}\n", style="white")
+
+            content.append("\n💡 ", style="bold")
+            content.append("Takeaway: ", style="bold green")
+            content.append(highlights.takeaway, style="italic")
+
+            panel = Panel(
+                content,
+                title="[bold]Extracted Highlights[/bold]",
+                title_align="left",
+                border_style="cyan",
+                padding=(0, 1),
+            )
+            console.print(panel)
+
+    except GeminiError as e:
+        # Display actionable error message
+        if show_progress:
+            console.print("[bold red]❌ Slide generation failed[/bold red]\n")
+            console.print(f"[yellow]{e.args[0]}[/yellow]\n")
+            if e.model or e.base_url:
+                console.print("[dim]Configuration:[/dim]")
+                if e.model:
+                    console.print(f"  • Model: [cyan]{e.model}[/cyan]")
+                if e.base_url:
+                    console.print(f"  • Base URL: [cyan]{e.base_url}[/cyan]")
+                console.print()
+            if e.status_code:
+                console.print(f"[dim]HTTP Status: {e.status_code}[/dim]")
+            if verbose and e.raw_response:
+                console.print("[dim]Raw response:[/dim]")
+                console.print(f"  {e.raw_response[:500]}")
+            if not verbose:
+                console.print("[dim]Run with --verbose for more details.[/dim]")
+        raise
+    finally:
+        await client.close()
+
+
 if __name__ == "__main__":
     app()
 

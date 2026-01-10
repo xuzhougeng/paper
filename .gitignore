@@ -165,3 +165,4 @@ output/
 *.json.tmp
 
 .cursor
+*.pdf

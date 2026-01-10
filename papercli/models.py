@@ -70,3 +70,21 @@ class PlatformQueryResult(BaseModel):
     )
     intent: QueryIntent = Field(..., description="The underlying query intent")
 
+
+class ArticleHighlights(BaseModel):
+    """Extracted highlights from an article for slide generation."""
+
+    title: str = Field(..., description="Main title for the slide")
+    subtitle: Optional[str] = Field(None, description="Optional subtitle or context")
+    bullets: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=8,
+        description="Key highlight points (1-8 bullets)",
+    )
+    takeaway: str = Field(..., description="One-sentence conclusion or main takeaway")
+    keywords: list[str] = Field(
+        default_factory=list,
+        description="Optional keywords for visual element hints",
+    )
+

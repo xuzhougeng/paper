@@ -53,6 +53,17 @@ class APIKeysConfig(BaseModel):
     openalex_email: Optional[str] = Field(default=None)  # Polite pool for OpenAlex
 
 
+class GeminiConfig(BaseModel):
+    """Gemini API configuration for slide generation."""
+
+    base_url: str = Field(default="https://api.openai-proxy.org/google/v1beta")
+    api_key: Optional[str] = Field(default=None)
+    text_model: str = Field(default="gemini-3-flash-preview")
+    image_model: str = Field(default="gemini-3-pro-image-preview")
+    timeout: float = Field(default=120.0)  # Longer timeout for image generation
+    max_retries: int = Field(default=3)
+
+
 class Settings(BaseModel):
     """Main settings container."""
 
@@ -61,6 +72,7 @@ class Settings(BaseModel):
     api_keys: APIKeysConfig = Field(default_factory=APIKeysConfig)
     doc2x: Doc2XConfig = Field(default_factory=Doc2XConfig)
     unpaywall: UnpaywallConfig = Field(default_factory=UnpaywallConfig)
+    gemini: GeminiConfig = Field(default_factory=GeminiConfig)
 
     # CLI overrides (set directly from command line)
     intent_model: Optional[str] = Field(default=None)
@@ -112,6 +124,16 @@ class Settings(BaseModel):
         # Unpaywall configuration
         if unpaywall_email := os.environ.get("UNPAYWALL_EMAIL"):
             self.unpaywall.email = unpaywall_email
+
+        # Gemini configuration
+        if gemini_api_key := os.environ.get("GEMINI_API_KEY"):
+            self.gemini.api_key = gemini_api_key
+        if gemini_base_url := os.environ.get("GEMINI_BASE_URL"):
+            self.gemini.base_url = gemini_base_url
+        if gemini_text_model := os.environ.get("GEMINI_TEXT_MODEL"):
+            self.gemini.text_model = gemini_text_model
+        if gemini_image_model := os.environ.get("GEMINI_IMAGE_MODEL"):
+            self.gemini.image_model = gemini_image_model
 
     def _load_from_config_file(self) -> None:
         """Load configuration from config file (~/.papercli.toml)."""
@@ -180,6 +202,20 @@ class Settings(BaseModel):
             if "timeout" in unpaywall_config:
                 self.unpaywall.timeout = unpaywall_config["timeout"]
 
+        if gemini_config := config_data.get("gemini"):
+            if "api_key" in gemini_config and not self.gemini.api_key:
+                self.gemini.api_key = gemini_config["api_key"]
+            if "base_url" in gemini_config:
+                self.gemini.base_url = gemini_config["base_url"]
+            if "text_model" in gemini_config:
+                self.gemini.text_model = gemini_config["text_model"]
+            if "image_model" in gemini_config:
+                self.gemini.image_model = gemini_config["image_model"]
+            if "timeout" in gemini_config:
+                self.gemini.timeout = gemini_config["timeout"]
+            if "max_retries" in gemini_config:
+                self.gemini.max_retries = gemini_config["max_retries"]
+
     def _apply_cli_overrides(self) -> None:
         """Apply CLI-provided overrides."""
         if self.intent_model:
@@ -240,4 +276,13 @@ class Settings(BaseModel):
     def get_ncbi_api_key(self) -> Optional[str]:
         """Get NCBI API key (optional, improves rate limits)."""
         return self.api_keys.ncbi_api_key
+
+    def get_gemini_api_key(self) -> str:
+        """Get Gemini API key or raise error."""
+        if not self.gemini.api_key:
+            raise ValueError(
+                "Gemini API key not configured. Set GEMINI_API_KEY environment variable "
+                "or add [gemini] api_key = '...' to your config file."
+            )
+        return self.gemini.api_key
 

@@ -9,6 +9,7 @@ A command-line tool for searching academic papers using LLM-powered query unders
 - **Platform-specific query generation**: Generate optimized search queries for PubMed, Google Scholar, or Web of Science
 - **PDF text extraction**: Extract text from PDFs using Doc2X API with page-level JSONL output
 - **DOI-based PDF download**: Fetch open-access PDFs via Unpaywall and PubMed Central (PMC)
+- **Article highlight slides**: Generate visual summary slides from article text using Gemini (multiple styles)
 - **Smart ranking**: Coarse lexical ranking followed by LLM-based relevance scoring
 - **Evidence extraction**: Returns the most relevant quote from each paper
 - **Configurable models**: Use different LLM models for intent extraction vs evaluation
@@ -16,12 +17,10 @@ A command-line tool for searching academic papers using LLM-powered query unders
 
 ## Installation
 
-```bash
-# From source
-pip install -e .
+Install PaperCLI from Github.
 
-# With dev dependencies
-pip install -e ".[dev]"
+```bash
+pip install git+https://github.com/xuzhougeng/paper.git
 ```
 
 ## Configuration
@@ -31,9 +30,6 @@ Set the following environment variables:
 ```bash
 # Required: LLM API key (OpenAI or compatible)
 export LLM_API_KEY="sk-..."
-
-# Optional: Custom LLM endpoint (OpenAI-compatible, defaults to OpenAI)
-export LLM_BASE_URL="https://api.openai.com/v1"
 
 # Optional: Model configuration (defaults shown)
 export PAPERCLI_INTENT_MODEL="gpt-4o-mini"  # For query rewriting
@@ -48,9 +44,22 @@ export DOC2X_API_KEY="sk-..."  # Get from https://open.noedgeai.com
 # Optional: Required for PDF download by DOI (paper fetch-pdf command)
 export UNPAYWALL_EMAIL="your@email.com"  # Required for Unpaywall API
 export NCBI_API_KEY="your-ncbi-key"       # Optional, improves PMC rate limits
+
+# Optional: Required for slide generation (paper slide command)
+export GEMINI_API_KEY="your-gemini-key"  # Get from Google AI Studio
 ```
 
-注: PAPERCLI_INTENT_MODEL建议模型不能弱于gpt-4o。如果无法使用官方API，可以通过LLM_BASE_URL设置第三方代理。例如我用的是[CloseAI](https://referer.shadowai.xyz/r/12432)。
+建议: PAPERCLI_INTENT_MODEL建议模型不能弱于gpt-4o, 最好是gpt-5等具有推理能力模型，这样子可以生成更好的检索词。
+
+注: `paper find`需要配置OpenAI的API Key, `paper slide`命令需要用到谷歌的AI Studio的API Key.
+如果无法使用官方API，可以使用第三方中转商，例如我用的是[CloseAI](https://referer.shadowai.xyz/r/12432)，配置方法如下:
+
+```bash
+export LLM_BASE_URL="https://api.openai-proxy.org/v1"  # for OpenAI
+export GEMINI_BASE_URL="https://api.openai-proxy.org/google/v1beta"  # for Google
+```
+
+
 
 Or create a `~/.papercli.toml` configuration file:
 
@@ -73,6 +82,12 @@ email = "your@email.com"  # Required for PDF download by DOI
 
 [api_keys]
 ncbi_api_key = "..."  # Optional: improves PMC rate limits
+
+[gemini]
+api_key = "..."  # Optional: for slide generation
+# base_url = "https://api.openai-proxy.org/google/v1beta"  # Default proxy
+# text_model = "gemini-3-flash-preview"  # For highlight extraction
+# image_model = "gemini-3-pro-image-preview"  # For slide image generation
 ```
 
 ## Usage
@@ -235,6 +250,47 @@ Options:
 - `--quiet/-q`: Suppress progress output
 
 **Note**: Requires `UNPAYWALL_EMAIL` environment variable or `[unpaywall] email` in config file.
+
+### Generate article highlight slides
+
+Use `slide` to generate a visual summary slide from article text. The command extracts key highlights using Gemini and generates a styled single-page PNG image.
+
+```bash
+# Generate a hand-drawn style slide from a text file
+paper slide --in article.txt --style handdrawn --out slide.png
+
+# Use minimal style with custom output
+paper slide --in paper.txt --style minimal --out summary.png
+
+# Pipe text from stdin
+cat article.txt | paper slide --style academic
+
+# Customize number of bullet points and image size
+paper slide --in text.txt --bullets 3 --image-size 2K --style dark
+
+# Show extracted highlights in terminal
+paper slide --in article.txt --style colorful --show-highlights
+```
+
+Supported styles:
+- `handdrawn`: Hand-drawn sketch style with marker strokes (default)
+- `minimal`: Ultra-minimalist clean design
+- `academic`: Professional academic poster style
+- `dark`: Dark futuristic tech theme
+- `colorful`: Vibrant and energetic design
+
+Options:
+- `--in PATH`: Input text file (reads from stdin if not provided)
+- `--out PATH`: Output PNG file path (default: `slide.png`)
+- `--style STYLE`: Visual style preset
+- `--bullets N`: Number of bullet points 1-8 (default: 5)
+- `--aspect-ratio`: Image aspect ratio: `16:9`, `4:3`, `1:1` (default: `16:9`)
+- `--image-size`: Image size: `1K`, `2K`, `4K` (default: `1K`)
+- `--show-highlights`: Print extracted highlights to terminal
+- `--verbose/-V`: Show detailed progress
+- `--quiet/-q`: Suppress progress output
+
+**Note**: Requires `GEMINI_API_KEY` environment variable or `[gemini] api_key` in config file.
 
 ## License
 
