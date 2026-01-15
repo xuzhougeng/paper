@@ -25,6 +25,8 @@ class Segment(BaseModel):
         "continuation", "contrast", "cause", "elaboration", "shift", "other"
     ] | None = None
     reason: str | None = None
+    needs_citation: bool = True
+    citation_reason: str | None = None
 
     @field_validator("text")
     @classmethod
@@ -32,6 +34,30 @@ class Segment(BaseModel):
         if not v or not v.strip():
             raise ValueError("Segment text must not be empty")
         return v.strip()
+
+    @field_validator("needs_citation", mode="before")
+    @classmethod
+    def normalize_needs_citation(cls, v: object) -> bool:
+        """
+        Normalize needs_citation from various LLM outputs to bool.
+
+        Accepts: true/false, yes/no, 1/0, "true"/"false", etc.
+        Defaults to True if value is invalid (fail-safe: don't skip citations).
+        """
+        if v is None:
+            return True
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in ("false", "no", "0", "n"):
+                return False
+            if s in ("true", "yes", "1", "y"):
+                return True
+        # Default to True (fail-safe: don't skip citations on unknown values)
+        return True
 
     @field_validator("relation_to_prev", mode="before")
     @classmethod
@@ -164,20 +190,31 @@ def _split_sentences_simple(text: str) -> list[str]:
 
 _SEGMENTATION_SYSTEM_PROMPT = """\
 You are an expert discourse analyst. Your task is to segment the given text into
-meaningful discourse units for citation purposes.
+meaningful discourse units and determine whether each segment needs a citation.
 
-Guidelines:
+Guidelines for segmentation:
 1. Segment by semantic/discourse boundaries, NOT just punctuation.
 2. Group closely related statements that share a single claim or idea.
 3. Separate statements that make distinct claims requiring different citations.
 4. Consider discourse relations: continuation, contrast, cause-effect, elaboration.
 5. Each segment should be a complete, citable unit of meaning.
 
+Guidelines for citation judgment (needs_citation):
+1. Set needs_citation=false for:
+   - Author's own work/contributions ("We propose...", "We conducted...", "Our approach...")
+   - Paper structure descriptions ("This paper is organized as follows...")
+   - Transitional sentences that don't make factual claims
+   - Common knowledge that requires no citation
+2. Set needs_citation=true for:
+   - Claims about others' research findings or conclusions
+   - Specific methods/techniques from prior work
+   - Domain facts, statistics, or consensus statements
+   - Comparisons referencing other work
+
 Return ONLY valid JSON matching the required schema."""
 
 _SEGMENTATION_USER_PROMPT = """\
-Segment the following text into discourse units suitable for citation.
-Each segment should represent a distinct claim or idea that may need its own citation.
+Segment the following text into discourse units and determine if each needs citation.
 
 Text to segment:
 ---
@@ -186,6 +223,8 @@ Text to segment:
 
 Return JSON with a "segments" array. Each segment must have:
 - "text": the exact text of this segment (required, non-empty)
+- "needs_citation": whether this segment needs a literature citation (required, boolean)
+- "citation_reason": brief explanation for the citation decision (optional, 1 sentence)
 - "relation_to_prev": how this relates to the previous segment (optional; MUST be one of: continuation, contrast, cause, elaboration, shift, other; if unsure use "other")
 - "reason": brief explanation for this segmentation choice (optional)"""
 
@@ -225,6 +264,46 @@ async def split_sentences_llm(
     )
 
     return [seg.text for seg in response.segments]
+
+
+async def split_segments_llm(
+    text: str,
+    llm_client: "LLMClient",
+    model: str | None = None,
+) -> list[Segment]:
+    """
+    Split text into discourse-aware segments using LLM, with citation intent.
+
+    This function returns full Segment objects including needs_citation
+    and citation_reason fields, suitable for the cite command.
+
+    Args:
+        text: The text to segment
+        llm_client: Initialized LLMClient instance
+        model: Optional model override (defaults to intent_model)
+
+    Returns:
+        List of Segment objects with text, needs_citation, citation_reason, etc.
+
+    Raises:
+        LLMError: If LLM call fails or returns invalid JSON
+        ValueError: If the response is missing segments or has empty text
+    """
+    from papercli.llm import LLMClient, LLMError
+
+    prompt = _SEGMENTATION_USER_PROMPT.format(text=text)
+
+    response = await llm_client.complete_json(
+        prompt=prompt,
+        response_model=SegmentationResponse,
+        model=model,
+        system_prompt=_SEGMENTATION_SYSTEM_PROMPT,
+        temperature=0.3,  # Lower temperature for more consistent segmentation
+        max_tokens=4000,
+        retry_on_parse_error=True,
+    )
+
+    return response.segments
 
 
 def _read_cite_input(input_file: Optional[str], input_text: Optional[str]) -> str:
@@ -490,11 +569,12 @@ def cite(
             transient=True,
         ) as progress:
             task = progress.add_task("[cyan]Segmenting text with LLM...", total=None)
-            sentences = asyncio.run(
-                split_sentences_llm(text, llm, model=intent_model)
+            segments = asyncio.run(
+                split_segments_llm(text, llm, model=intent_model)
             )
+            needs_cite_count = sum(1 for seg in segments if seg.needs_citation)
             progress.update(
-                task, description=f"[green]✓ Segmented into {len(sentences)} units"
+                task, description=f"[green]✓ Segmented into {len(segments)} units ({needs_cite_count} need citations)"
             )
     except LLMError as e:
         console.print(f"[red]Error:[/red] LLM segmentation failed: {e}")
@@ -507,14 +587,14 @@ def cite(
             console.print_exception()
         raise typer.Exit(1)
 
-    if not sentences:
+    if not segments:
         console.print("[red]Error:[/red] No segments found in input")
         raise typer.Exit(1)
 
-    # Run per-sentence searches
+    # Run per-segment searches (skip segments that don't need citations)
     show_progress = not quiet
     sentence_results = []
-    total = len(sentences)
+    total = len(segments)
 
     with Progress(
         SpinnerColumn(),
@@ -527,15 +607,31 @@ def cite(
     ) as progress:
         task = progress.add_task("[cyan]Finding citations...", total=total)
 
-        for index, sentence in enumerate(sentences, 1):
+        for index, seg in enumerate(segments, 1):
+            sentence = seg.text
             if show_progress:
                 preview = sentence.strip()
                 if len(preview) > 60:
                     preview = preview[:57] + "..."
                 progress.update(
                     task,
-                    description=f"[cyan]Sentence {index}/{total}: {preview}",
+                    description=f"[cyan]Segment {index}/{total}: {preview}",
                 )
+
+            # Skip citation search for segments that don't need citations
+            if not seg.needs_citation:
+                sentence_results.append(
+                    {
+                        "sentence": sentence,
+                        "results": [],
+                        "recommended": None,
+                        "error": None,
+                        "needs_citation": False,
+                        "citation_reason": seg.citation_reason,
+                    }
+                )
+                progress.advance(task, 1)
+                continue
 
             try:
                 results = run_pipeline(
@@ -558,6 +654,8 @@ def cite(
                         "results": results,
                         "recommended": recommended,
                         "error": None,
+                        "needs_citation": True,
+                        "citation_reason": seg.citation_reason,
                     }
                 )
             except Exception as e:
@@ -568,6 +666,8 @@ def cite(
                         "results": [],
                         "recommended": None,
                         "error": error_text,
+                        "needs_citation": True,
+                        "citation_reason": seg.citation_reason,
                     }
                 )
 

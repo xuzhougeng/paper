@@ -12,11 +12,13 @@ from rich.text import Text
 from papercli.models import EvalResult, PlatformQueryResult
 
 
-class SentenceCiteResult(TypedDict):
+class SentenceCiteResult(TypedDict, total=False):
     sentence: str
     results: list[EvalResult]
     recommended: EvalResult | None
     error: str | None
+    needs_citation: bool  # True by default if not specified
+    citation_reason: str | None  # Explanation for citation decision
 
 
 def format_output(
@@ -66,9 +68,21 @@ def format_citation_report(
 
     for index, item in enumerate(sentence_results, 1):
         sentence = item["sentence"]
-        lines.append(f"## Sentence {index}")
+        lines.append(f"## Segment {index}")
         lines.append(sentence)
         lines.append("")
+
+        # Handle segments that don't need citations (skip search entirely)
+        needs_citation = item.get("needs_citation", True)
+        if not needs_citation:
+            lines.append("**No citation needed.**")
+            citation_reason = item.get("citation_reason")
+            if citation_reason:
+                lines.append(f"*Reason: {citation_reason}*")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            continue
 
         error = item.get("error")
         if error:

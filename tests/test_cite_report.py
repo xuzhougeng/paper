@@ -5,6 +5,7 @@ import pytest
 from papercli.cli import (
     _split_sentences_simple,
     split_sentences_llm,
+    split_segments_llm,
     Segment,
     SegmentationResponse,
 )
@@ -78,6 +79,46 @@ def test_segment_model_normalizes_relation_to_prev_unknown_values():
     assert seg2.relation_to_prev == "cause"
 
 
+def test_segment_needs_citation_defaults_to_true():
+    """Segment.needs_citation defaults to True if not specified."""
+    seg = Segment(text="Some claim.")
+    assert seg.needs_citation is True
+
+
+def test_segment_needs_citation_accepts_various_formats():
+    """Segment.needs_citation normalizes various LLM output formats."""
+    # Boolean values
+    assert Segment(text="Claim.", needs_citation=True).needs_citation is True
+    assert Segment(text="Claim.", needs_citation=False).needs_citation is False
+
+    # String values
+    assert Segment(text="Claim.", needs_citation="true").needs_citation is True
+    assert Segment(text="Claim.", needs_citation="false").needs_citation is False
+    assert Segment(text="Claim.", needs_citation="yes").needs_citation is True
+    assert Segment(text="Claim.", needs_citation="no").needs_citation is False
+    assert Segment(text="Claim.", needs_citation="1").needs_citation is True
+    assert Segment(text="Claim.", needs_citation="0").needs_citation is False
+
+    # Integer values
+    assert Segment(text="Claim.", needs_citation=1).needs_citation is True
+    assert Segment(text="Claim.", needs_citation=0).needs_citation is False
+
+    # Unknown/invalid values default to True (fail-safe)
+    assert Segment(text="Claim.", needs_citation="maybe").needs_citation is True
+    assert Segment(text="Claim.", needs_citation=None).needs_citation is True
+
+
+def test_segment_citation_reason_field():
+    """Segment can store citation_reason explanation."""
+    seg = Segment(
+        text="We conducted an experiment.",
+        needs_citation=False,
+        citation_reason="Author's own work",
+    )
+    assert seg.needs_citation is False
+    assert seg.citation_reason == "Author's own work"
+
+
 # ---------------------------------------------------------------------------
 # LLM splitter tests (mocked)
 # ---------------------------------------------------------------------------
@@ -128,6 +169,39 @@ async def test_split_sentences_llm_propagates_error():
         await split_sentences_llm(text="Some text.", llm_client=mock_client)
 
 
+@pytest.mark.asyncio
+async def test_split_segments_llm_returns_full_segments():
+    """split_segments_llm returns full Segment objects with needs_citation."""
+    mock_response = SegmentationResponse(
+        segments=[
+            Segment(
+                text="CRISPR enables precise gene editing.",
+                needs_citation=True,
+                citation_reason="Domain fact",
+            ),
+            Segment(
+                text="We propose a novel approach.",
+                needs_citation=False,
+                citation_reason="Author's own work",
+            ),
+        ]
+    )
+    mock_client = MockLLMClient(mock_response)
+
+    result = await split_segments_llm(
+        text="CRISPR enables precise gene editing. We propose a novel approach.",
+        llm_client=mock_client,
+    )
+
+    assert len(result) == 2
+    assert result[0].text == "CRISPR enables precise gene editing."
+    assert result[0].needs_citation is True
+    assert result[0].citation_reason == "Domain fact"
+    assert result[1].text == "We propose a novel approach."
+    assert result[1].needs_citation is False
+    assert result[1].citation_reason == "Author's own work"
+
+
 def test_format_citation_report_includes_recommended():
     paper = Paper(
         source="pubmed",
@@ -156,6 +230,7 @@ def test_format_citation_report_includes_recommended():
                 "results": [result],
                 "recommended": result,
                 "error": None,
+                "needs_citation": True,
             }
         ],
         sources=["pubmed"],
@@ -163,9 +238,92 @@ def test_format_citation_report_includes_recommended():
     )
 
     assert "# Citation Report" in report
-    assert "## Sentence 1" in report
+    assert "## Segment 1" in report
     assert "This is a test sentence." in report
     assert "Example Paper Title" in report
     assert "https://doi.org/10.1000/example" in report
     assert "Example abstract sentence for evidence." in report
+    assert "Candidates (top-1)" in report
+
+
+def test_format_citation_report_no_citation_needed():
+    """Report correctly displays segments that don't need citations."""
+    report = format_citation_report(
+        [
+            {
+                "sentence": "We conducted an end-to-end benchmark.",
+                "results": [],
+                "recommended": None,
+                "error": None,
+                "needs_citation": False,
+                "citation_reason": "Author's own work description",
+            }
+        ],
+        sources=["pubmed"],
+        top_k=3,
+    )
+
+    assert "# Citation Report" in report
+    assert "## Segment 1" in report
+    assert "We conducted an end-to-end benchmark." in report
+    assert "**No citation needed.**" in report
+    assert "Author's own work description" in report
+    # Should NOT contain search-related output
+    assert "Candidates" not in report
+    assert "Recommended" not in report
+    assert "No results found" not in report
+
+
+def test_format_citation_report_mixed_needs_citation():
+    """Report handles mix of segments needing/not needing citations."""
+    paper = Paper(
+        source="pubmed",
+        source_id="pmid:456",
+        title="Related Work Paper",
+        abstract="Evidence text here.",
+        year=2023,
+        authors=["C. Author"],
+        doi="10.1000/related",
+        venue="Journal",
+        url="https://example.org/related",
+    )
+    result = EvalResult(
+        paper=paper,
+        score=8.5,
+        meets_need=True,
+        evidence_quote="Evidence text here.",
+        evidence_field="abstract",
+        short_reason="Supports the claim.",
+    )
+
+    report = format_citation_report(
+        [
+            {
+                "sentence": "We propose a novel method.",
+                "results": [],
+                "recommended": None,
+                "error": None,
+                "needs_citation": False,
+                "citation_reason": "Own contribution",
+            },
+            {
+                "sentence": "Previous work has shown X.",
+                "results": [result],
+                "recommended": result,
+                "error": None,
+                "needs_citation": True,
+                "citation_reason": None,
+            },
+        ],
+        sources=["pubmed"],
+        top_k=3,
+    )
+
+    # First segment - no citation needed
+    assert "We propose a novel method." in report
+    assert "**No citation needed.**" in report
+
+    # Second segment - has citation
+    assert "Previous work has shown X." in report
+    assert "Related Work Paper" in report
     assert "Candidates (top-1)" in report
