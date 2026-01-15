@@ -1,11 +1,107 @@
 """Command-line interface for papercli."""
 
-from typing import Annotated, Optional
+from typing import TYPE_CHECKING, Annotated, Literal, Optional
 
 import typer
+from pydantic import BaseModel, field_validator
 from rich.console import Console
 
 from papercli import __version__
+
+if TYPE_CHECKING:
+    from papercli.llm import LLMClient
+
+
+# ---------------------------------------------------------------------------
+# LLM-based sentence segmentation schema
+# ---------------------------------------------------------------------------
+
+
+class Segment(BaseModel):
+    """A single discourse segment from LLM segmentation."""
+
+    text: str
+    relation_to_prev: Literal[
+        "continuation", "contrast", "cause", "elaboration", "shift", "other"
+    ] | None = None
+    reason: str | None = None
+
+    @field_validator("text")
+    @classmethod
+    def text_must_not_be_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Segment text must not be empty")
+        return v.strip()
+
+    @field_validator("relation_to_prev", mode="before")
+    @classmethod
+    def normalize_relation_to_prev(cls, v: object) -> object:
+        """
+        Be tolerant to slightly-off labels from the LLM.
+
+        The CLI currently only uses Segment.text, but strict validation here can
+        fail the whole cite run if the model returns a near-miss like "result".
+        """
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            return "other"
+
+        s = v.strip().lower()
+        if not s:
+            return None
+
+        # Normalize common variants/synonyms into our supported enum.
+        synonyms = {
+            # continuation
+            "continue": "continuation",
+            "continued": "continuation",
+            "cont": "continuation",
+            "same": "continuation",
+            # contrast
+            "contradiction": "contrast",
+            "opposition": "contrast",
+            "however": "contrast",
+            # cause
+            "cause-effect": "cause",
+            "cause_effect": "cause",
+            "cause and effect": "cause",
+            "effect": "cause",
+            "because": "cause",
+            "reason": "cause",
+            # elaboration
+            "detail": "elaboration",
+            "details": "elaboration",
+            "explanation": "elaboration",
+            "example": "elaboration",
+            # shift
+            "transition": "shift",
+            "topic shift": "shift",
+            # other / frequent "extra" labels we see from LLMs
+            "result": "other",
+            "results": "other",
+            "finding": "other",
+            "findings": "other",
+            "conclusion": "other",
+            "summary": "other",
+        }
+        s = synonyms.get(s, s)
+
+        allowed = {"continuation", "contrast", "cause", "elaboration", "shift", "other"}
+        return s if s in allowed else "other"
+
+
+class SegmentationResponse(BaseModel):
+    """LLM response containing segmented text."""
+
+    segments: list[Segment]
+
+    @field_validator("segments")
+    @classmethod
+    def segments_must_not_be_empty(cls, v: list[Segment]) -> list[Segment]:
+        if not v:
+            raise ValueError("segments list must not be empty")
+        return v
 
 app = typer.Typer(
     name="paper",
@@ -32,8 +128,12 @@ def main(
     pass
 
 
-def split_sentences(text: str) -> list[str]:
-    """Split text into sentences using Chinese/English punctuation and newlines."""
+def _split_sentences_simple(text: str) -> list[str]:
+    """Split text into sentences using Chinese/English punctuation and newlines.
+
+    This is a simple fallback implementation. Prefer split_sentences_llm for
+    discourse-aware segmentation.
+    """
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     sentences: list[str] = []
     buffer: list[str] = []
@@ -56,6 +156,75 @@ def split_sentences(text: str) -> list[str]:
 
     flush()
     return sentences
+
+
+# ---------------------------------------------------------------------------
+# LLM-based sentence segmentation prompt
+# ---------------------------------------------------------------------------
+
+_SEGMENTATION_SYSTEM_PROMPT = """\
+You are an expert discourse analyst. Your task is to segment the given text into
+meaningful discourse units for citation purposes.
+
+Guidelines:
+1. Segment by semantic/discourse boundaries, NOT just punctuation.
+2. Group closely related statements that share a single claim or idea.
+3. Separate statements that make distinct claims requiring different citations.
+4. Consider discourse relations: continuation, contrast, cause-effect, elaboration.
+5. Each segment should be a complete, citable unit of meaning.
+
+Return ONLY valid JSON matching the required schema."""
+
+_SEGMENTATION_USER_PROMPT = """\
+Segment the following text into discourse units suitable for citation.
+Each segment should represent a distinct claim or idea that may need its own citation.
+
+Text to segment:
+---
+{text}
+---
+
+Return JSON with a "segments" array. Each segment must have:
+- "text": the exact text of this segment (required, non-empty)
+- "relation_to_prev": how this relates to the previous segment (optional; MUST be one of: continuation, contrast, cause, elaboration, shift, other; if unsure use "other")
+- "reason": brief explanation for this segmentation choice (optional)"""
+
+
+async def split_sentences_llm(
+    text: str,
+    llm_client: "LLMClient",
+    model: str | None = None,
+) -> list[str]:
+    """
+    Split text into discourse-aware segments using LLM.
+
+    Args:
+        text: The text to segment
+        llm_client: Initialized LLMClient instance
+        model: Optional model override (defaults to intent_model)
+
+    Returns:
+        List of segment texts
+
+    Raises:
+        LLMError: If LLM call fails or returns invalid JSON
+        ValueError: If the response is missing segments or has empty text
+    """
+    from papercli.llm import LLMClient, LLMError
+
+    prompt = _SEGMENTATION_USER_PROMPT.format(text=text)
+
+    response = await llm_client.complete_json(
+        prompt=prompt,
+        response_model=SegmentationResponse,
+        model=model,
+        system_prompt=_SEGMENTATION_SYSTEM_PROMPT,
+        temperature=0.3,  # Lower temperature for more consistent segmentation
+        max_tokens=4000,
+        retry_on_parse_error=True,
+    )
+
+    return [seg.text for seg in response.segments]
 
 
 def _read_cite_input(input_file: Optional[str], input_text: Optional[str]) -> str:
@@ -294,12 +463,7 @@ def cite(
         console.print(f"[red]Error:[/red] Failed to read input: {e}")
         raise typer.Exit(1)
 
-    sentences = split_sentences(text)
-    if not sentences:
-        console.print("[red]Error:[/red] No sentences found in input")
-        raise typer.Exit(1)
-
-    # Build settings
+    # Build settings (needed for LLM client)
     settings = Settings(
         intent_model=intent_model,
         eval_model=eval_model,
@@ -307,6 +471,45 @@ def cite(
         cache_path=cache_path,
         cache_enabled=not no_cache,
     )
+
+    # Segment text using LLM
+    import asyncio
+    from papercli.llm import LLMClient, LLMError
+
+    llm = LLMClient(settings)
+
+    show_progress = not quiet
+    try:
+        from rich.progress import Progress, SpinnerColumn, TextColumn
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            disable=not show_progress,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("[cyan]Segmenting text with LLM...", total=None)
+            sentences = asyncio.run(
+                split_sentences_llm(text, llm, model=intent_model)
+            )
+            progress.update(
+                task, description=f"[green]✓ Segmented into {len(sentences)} units"
+            )
+    except LLMError as e:
+        console.print(f"[red]Error:[/red] LLM segmentation failed: {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Segmentation failed: {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+
+    if not sentences:
+        console.print("[red]Error:[/red] No segments found in input")
+        raise typer.Exit(1)
 
     # Run per-sentence searches
     show_progress = not quiet

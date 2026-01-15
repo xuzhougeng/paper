@@ -63,6 +63,31 @@ Found 5 relevant papers (5 highly relevant) from 107 candidates
 ...
 ```
 
+cite 命令使用 LLM 进行智能分句，不是简单地按标点符号拆分，而是根据语句之间的语义关系（如因果、对比、延续等）推断出更合适的拆分方式。分句使用的是 `intent_model`（意图理解模型），你可以通过环境变量或命令行参数覆盖。
+
+```bash
+paper cite --text "作物单细胞制备困难。不同组织的酶解条件差异很大！"
+```
+
+从文本文件读取并输出报告：
+
+```bash
+paper cite --in notes.txt --out report.md --top-k 3
+```
+
+支持 stdin：
+
+```bash
+cat notes.txt | paper cite --top-k 2
+```
+
+指定其他模型进行分句：
+
+```bash
+paper cite --text "..." --intent-model gpt-4o
+```
+
+
 ## 文献下载
 
 根据DOI下载PDF，这一步基于unpaywall API(无需KEY)
