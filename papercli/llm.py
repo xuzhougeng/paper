@@ -65,6 +65,24 @@ class LLMClient:
             )
         return self._client
 
+    async def close(self) -> None:
+        """Close the underlying HTTP client to avoid loop shutdown errors."""
+        if self._client is None:
+            return
+        close_fn = getattr(self._client, "close", None)
+        if callable(close_fn):
+            result = close_fn()
+            if hasattr(result, "__await__"):
+                await result
+            self._client = None
+            return
+        aclose_fn = getattr(self._client, "aclose", None)
+        if callable(aclose_fn):
+            result = aclose_fn()
+            if hasattr(result, "__await__"):
+                await result
+        self._client = None
+
     async def complete(
         self,
         prompt: str,

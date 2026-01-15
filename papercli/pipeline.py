@@ -153,148 +153,154 @@ async def _run_pipeline_async(
 
     show_progress = not quiet
 
-    # Step 1: Extract query intent (show spinner while processing)
-    intent = None
     try:
+        # Step 1: Extract query intent (show spinner while processing)
+        intent = None
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                disable=not show_progress,
+                transient=True,
+            ) as progress:
+                task = progress.add_task("[cyan]Step 1/5: Analyzing query intent...", total=None)
+                intent = await extract_intent(query, llm, cache)
+                progress.update(task, description="[green]✓ Query analyzed")
+        except LLMError as e:
+            # Display actionable error message
+            if show_progress:
+                console.print(
+                    "[bold red]❌ Query analysis failed[/bold red]\n\n"
+                    f"[yellow]{e.args[0]}[/yellow]\n"
+                )
+                if e.model or e.base_url:
+                    console.print("[dim]Configuration:[/dim]")
+                    if e.model:
+                        console.print(f"  • Model: [cyan]{e.model}[/cyan]")
+                    if e.base_url:
+                        console.print(f"  • Base URL: [cyan]{e.base_url}[/cyan]")
+                    console.print()
+                if e.original_exception:
+                    console.print(
+                        f"[dim]Original error:[/dim] {type(e.original_exception).__name__}: {e.original_exception}\n"
+                    )
+                if verbose and e.raw_responses:
+                    console.print("[dim]Raw LLM response(s):[/dim]")
+                    for i, resp in enumerate(e.raw_responses, 1):
+                        truncated = resp[:1000] + "..." if len(resp) > 1000 else resp
+                        console.print(f"  [dim][{i}][/dim] {truncated}\n")
+                if not verbose:
+                    console.print("[dim]Run with --verbose for more details (including raw LLM responses).[/dim]")
+            raise  # Re-raise for non-zero exit
+
+        # Display intent analysis results
+        _display_intent_analysis(intent, show_progress)
+
+        # Continue with the rest of the pipeline
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+            BarColumn(bar_width=20),
+            TaskProgressColumn(),
             console=console,
             disable=not show_progress,
             transient=True,
         ) as progress:
-            task = progress.add_task("[cyan]Step 1/5: Analyzing query intent...", total=None)
-            intent = await extract_intent(query, llm, cache)
-            progress.update(task, description="[green]✓ Query analyzed")
-    except LLMError as e:
-        # Display actionable error message
-        if show_progress:
-            console.print(
-                "[bold red]❌ Query analysis failed[/bold red]\n\n"
-                f"[yellow]{e.args[0]}[/yellow]\n"
-            )
-            if e.model or e.base_url:
-                console.print("[dim]Configuration:[/dim]")
-                if e.model:
-                    console.print(f"  • Model: [cyan]{e.model}[/cyan]")
-                if e.base_url:
-                    console.print(f"  • Base URL: [cyan]{e.base_url}[/cyan]")
-                console.print()
-            if e.original_exception:
-                console.print(
-                    f"[dim]Original error:[/dim] {type(e.original_exception).__name__}: {e.original_exception}\n"
-                )
-            if verbose and e.raw_responses:
-                console.print("[dim]Raw LLM response(s):[/dim]")
-                for i, resp in enumerate(e.raw_responses, 1):
-                    truncated = resp[:1000] + "..." if len(resp) > 1000 else resp
-                    console.print(f"  [dim][{i}][/dim] {truncated}\n")
-            if not verbose:
-                console.print("[dim]Run with --verbose for more details (including raw LLM responses).[/dim]")
-        raise  # Re-raise for non-zero exit
+            # Main task for remaining progress (steps 2-5)
+            main_task = progress.add_task("[cyan]Searching...", total=100)
 
-    # Display intent analysis results
-    _display_intent_analysis(intent, show_progress)
+            # Step 2: Multi-source search (0% -> 50%)
+            progress.update(main_task, description=f"[cyan]Step 2/5: Searching {len(sources)} sources...")
+            papers = await _search_all_sources(sources, intent, max_per_source, cache, verbose, progress)
+            progress.update(main_task, completed=50)
 
-    # Continue with the rest of the pipeline
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=20),
-        TaskProgressColumn(),
-        console=console,
-        disable=not show_progress,
-        transient=True,
-    ) as progress:
-        # Main task for remaining progress (steps 2-5)
-        main_task = progress.add_task("[cyan]Searching...", total=100)
+            if not papers:
+                progress.update(main_task, completed=100, description="[yellow]No papers found")
+                if show_progress:
+                    console.print("[yellow]No papers found matching your query.[/yellow]")
+                return []
 
-        # Step 2: Multi-source search (0% -> 50%)
-        progress.update(main_task, description=f"[cyan]Step 2/5: Searching {len(sources)} sources...")
-        papers = await _search_all_sources(sources, intent, max_per_source, cache, verbose, progress)
-        progress.update(main_task, completed=50)
+            if verbose:
+                console.print(f"  [dim]→ Found {len(papers)} papers from all sources[/dim]")
 
-        if not papers:
-            progress.update(main_task, completed=100, description="[yellow]No papers found")
-            if show_progress:
-                console.print("[yellow]No papers found matching your query.[/yellow]")
-            return []
+            # Step 3: Deduplicate (50% -> 60%)
+            progress.update(main_task, description="[cyan]Step 3/5: Removing duplicates...")
+            original_count = len(papers)
+            papers = deduplicate(papers)
+            progress.update(main_task, completed=60)
 
-        if verbose:
-            console.print(f"  [dim]→ Found {len(papers)} papers from all sources[/dim]")
+            if verbose:
+                removed = original_count - len(papers)
+                console.print(f"  [dim]→ Removed {removed} duplicates, {len(papers)} unique papers[/dim]")
 
-        # Step 3: Deduplicate (50% -> 60%)
-        progress.update(main_task, description="[cyan]Step 3/5: Removing duplicates...")
-        original_count = len(papers)
-        papers = deduplicate(papers)
-        progress.update(main_task, completed=60)
+            # Step 4: Coarse ranking (60% -> 70%)
+            progress.update(main_task, description="[cyan]Step 4/5: Ranking candidates...")
+            # When show_all, rank all papers but don't limit to prefilter_k
+            rank_k = len(papers) if show_all else prefilter_k
+            candidates = coarse_rank(papers, intent, k=rank_k)
+            progress.update(main_task, completed=70)
 
-        if verbose:
-            removed = original_count - len(papers)
-            console.print(f"  [dim]→ Removed {removed} duplicates, {len(papers)} unique papers[/dim]")
+            if verbose:
+                console.print(f"  [dim]→ Selected top {len(candidates)} candidates for evaluation[/dim]")
 
-        # Step 4: Coarse ranking (60% -> 70%)
-        progress.update(main_task, description="[cyan]Step 4/5: Ranking candidates...")
-        # When show_all, rank all papers but don't limit to prefilter_k
-        rank_k = len(papers) if show_all else prefilter_k
-        candidates = coarse_rank(papers, intent, k=rank_k)
-        progress.update(main_task, completed=70)
-
-        if verbose:
-            console.print(f"  [dim]→ Selected top {len(candidates)} candidates for evaluation[/dim]")
-
-        if show_all:
-            # Skip LLM reranking - convert papers to EvalResult with placeholder values
-            progress.update(main_task, description="[cyan]Step 5/5: Preparing all results...")
-            results = [
-                EvalResult(
-                    paper=paper,
-                    score=0.0,
-                    meets_need=False,
-                    evidence_quote="",
-                    evidence_field="",
-                    short_reason="(LLM evaluation skipped with --show-all)",
-                )
-                for paper in candidates
-            ]
-            progress.update(main_task, completed=95)
-            final_results = results  # Return all
-        else:
-            # Step 5: LLM reranking (70% -> 95%)
-            progress.update(main_task, description=f"[cyan]Step 5/5: Evaluating {len(candidates)} papers with LLM...")
-            results = await rerank_with_llm(
-                query, candidates, llm, cache,
-                progress_callback=lambda i, total: progress.update(
+            if show_all:
+                # Skip LLM reranking - convert papers to EvalResult with placeholder values
+                progress.update(main_task, description="[cyan]Step 5/5: Preparing all results...")
+                results = [
+                    EvalResult(
+                        paper=paper,
+                        score=0.0,
+                        meets_need=False,
+                        evidence_quote="",
+                        evidence_field="",
+                        short_reason="(LLM evaluation skipped with --show-all)",
+                    )
+                    for paper in candidates
+                ]
+                progress.update(main_task, completed=95)
+                final_results = results  # Return all
+            else:
+                # Step 5: LLM reranking (70% -> 95%)
+                progress.update(
                     main_task,
-                    completed=70 + int(25 * i / total),
-                    description=f"[cyan]Step 5/5: Evaluating paper {i}/{total}..."
+                    description=f"[cyan]Step 5/5: Evaluating {len(candidates)} papers with LLM..."
                 )
-            )
-            progress.update(main_task, completed=95)
+                results = await rerank_with_llm(
+                    query, candidates, llm, cache,
+                    progress_callback=lambda i, total: progress.update(
+                        main_task,
+                        completed=70 + int(25 * i / total),
+                        description=f"[cyan]Step 5/5: Evaluating paper {i}/{total}..."
+                    )
+                )
+                progress.update(main_task, completed=95)
 
-            # Step 6: Return top_n (100%)
-            results = sorted(results, key=lambda r: r.score, reverse=True)
-            final_results = results[:top_n]
+                # Step 6: Return top_n (100%)
+                results = sorted(results, key=lambda r: r.score, reverse=True)
+                final_results = results[:top_n]
 
-        progress.update(main_task, description="[cyan]Finalizing results...")
-        progress.update(main_task, completed=100, description="[green]✓ Search complete!")
+            progress.update(main_task, description="[cyan]Finalizing results...")
+            progress.update(main_task, completed=100, description="[green]✓ Search complete!")
 
-    # Print summary
-    if show_progress:
-        if show_all:
-            console.print(
-                f"\n[dim]Showing all [bold]{len(final_results)}[/bold] papers "
-                f"from {len(papers)} candidates (LLM evaluation skipped)[/dim]\n"
-            )
-        else:
-            meets_need_count = sum(1 for r in final_results if r.meets_need)
-            console.print(
-                f"\n[dim]Found [bold]{len(final_results)}[/bold] relevant papers "
-                f"([green]{meets_need_count}[/green] highly relevant) "
-                f"from {len(papers)} candidates[/dim]\n"
-            )
+        # Print summary
+        if show_progress:
+            if show_all:
+                console.print(
+                    f"\n[dim]Showing all [bold]{len(final_results)}[/bold] papers "
+                    f"from {len(papers)} candidates (LLM evaluation skipped)[/dim]\n"
+                )
+            else:
+                meets_need_count = sum(1 for r in final_results if r.meets_need)
+                console.print(
+                    f"\n[dim]Found [bold]{len(final_results)}[/bold] relevant papers "
+                    f"([green]{meets_need_count}[/green] highly relevant) "
+                    f"from {len(papers)} candidates[/dim]\n"
+                )
 
-    return final_results
+        return final_results
+    finally:
+        await llm.close()
 
 
 async def _search_all_sources(

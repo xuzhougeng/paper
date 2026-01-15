@@ -1,7 +1,7 @@
 """Output formatting for papercli results."""
 
 import json
-from typing import Literal
+from typing import Literal, TypedDict
 
 from rich.console import Console, Group
 from rich.markdown import Markdown
@@ -10,6 +10,13 @@ from rich.table import Table
 from rich.text import Text
 
 from papercli.models import EvalResult, PlatformQueryResult
+
+
+class SentenceCiteResult(TypedDict):
+    sentence: str
+    results: list[EvalResult]
+    recommended: EvalResult | None
+    error: str | None
 
 
 def format_output(
@@ -42,6 +49,82 @@ def format_output(
         return _format_markdown(results, show_all)
     else:  # table
         return _format_table(results, show_all)
+
+
+def format_citation_report(
+    sentence_results: list[SentenceCiteResult],
+    sources: list[str],
+    top_k: int,
+) -> str:
+    """Format sentence-level citation results as Markdown."""
+    lines = ["# Citation Report", ""]
+
+    if sources:
+        lines.append(f"**Sources:** {', '.join(sources)}")
+    lines.append(f"**Top-K per sentence:** {top_k}")
+    lines.append("")
+
+    for index, item in enumerate(sentence_results, 1):
+        sentence = item["sentence"]
+        lines.append(f"## Sentence {index}")
+        lines.append(sentence)
+        lines.append("")
+
+        error = item.get("error")
+        if error:
+            lines.append(f"**Error:** {error}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            continue
+
+        results = item.get("results") or []
+        if not results:
+            lines.append("**No results found.**")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            continue
+
+        recommended = item.get("recommended") or results[0]
+        rec_paper = recommended.paper
+        link = ""
+        if rec_paper.doi:
+            link = f"https://doi.org/{rec_paper.doi}"
+        elif rec_paper.url:
+            link = rec_paper.url
+
+        lines.append("**Recommended**")
+        if link:
+            lines.append(f"- {rec_paper.title} ({link})")
+        else:
+            lines.append(f"- {rec_paper.title}")
+        lines.append("")
+        lines.append(f"> {recommended.evidence_quote}")
+        lines.append(f"*— from {recommended.evidence_field}*")
+        lines.append("")
+        lines.append(f"**Why relevant:** {recommended.short_reason}")
+        lines.append("")
+
+        lines.append(f"**Candidates (top-{min(top_k, len(results))})**")
+        for rank, result in enumerate(results, 1):
+            paper = result.paper
+            status = "yes" if result.meets_need else "no"
+            link = ""
+            if paper.doi:
+                link = f"https://doi.org/{paper.doi}"
+            elif paper.url:
+                link = paper.url
+            link_part = f" ({link})" if link else ""
+            lines.append(
+                f"- {rank}. {paper.title} (score: {result.score:.1f}, meets_need: {status}){link_part}"
+            )
+
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    return "\n".join(lines).strip()
 
 
 def _format_json(results: list[EvalResult], show_all: bool = False) -> str:

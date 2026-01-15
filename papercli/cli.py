@@ -32,6 +32,55 @@ def main(
     pass
 
 
+def split_sentences(text: str) -> list[str]:
+    """Split text into sentences using Chinese/English punctuation and newlines."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    sentences: list[str] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if not buffer:
+            return
+        sentence = "".join(buffer).strip()
+        if sentence:
+            sentences.append(sentence)
+        buffer.clear()
+
+    for ch in normalized:
+        if ch == "\n":
+            flush()
+            continue
+        buffer.append(ch)
+        if ch in "。！？!?.":
+            flush()
+
+    flush()
+    return sentences
+
+
+def _read_cite_input(input_file: Optional[str], input_text: Optional[str]) -> str:
+    """Read cite input text from --in, --text, or stdin."""
+    from pathlib import Path
+    import sys
+
+    if input_file and input_text:
+        raise ValueError("Use only one of --in or --text, not both.")
+
+    if input_text is not None:
+        return input_text
+
+    if input_file:
+        path = Path(input_file)
+        if not path.exists():
+            raise FileNotFoundError(f"Input file not found: {input_file}")
+        return path.read_text(encoding="utf-8")
+
+    if sys.stdin.isatty():
+        raise ValueError("No input provided. Use --in, --text, or pipe text to stdin.")
+
+    return sys.stdin.read()
+
+
 @app.command()
 def find(
     query: Annotated[str, typer.Argument(help="Your search query (a sentence describing what you're looking for)")],
@@ -143,6 +192,193 @@ def find(
         else:
             console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+
+
+@app.command()
+def cite(
+    input_file: Annotated[
+        Optional[str],
+        typer.Option("--in", "-i", help="Input text file (reads from stdin if not provided)"),
+    ] = None,
+    input_text: Annotated[
+        Optional[str],
+        typer.Option("--text", help="Input text to split into sentences"),
+    ] = None,
+    out: Annotated[
+        str,
+        typer.Option("--out", "-o", help="Output report path (default: report.md)"),
+    ] = "report.md",
+    top_k: Annotated[
+        int,
+        typer.Option("--top-k", "-k", help="Top citations to keep per sentence"),
+    ] = 3,
+    sources: Annotated[
+        str,
+        typer.Option("--sources", "-s", help="Comma-separated list of sources: pubmed,openalex,scholar,arxiv"),
+    ] = "pubmed,openalex,scholar",
+    max_per_source: Annotated[
+        int,
+        typer.Option("--max-per-source", help="Maximum papers to fetch per source"),
+    ] = 50,
+    prefilter_k: Annotated[
+        int,
+        typer.Option("--prefilter-k", help="Number of candidates to send to LLM for reranking"),
+    ] = 30,
+    intent_model: Annotated[
+        Optional[str],
+        typer.Option("--intent-model", help="Model for query rewriting/intent extraction"),
+    ] = None,
+    eval_model: Annotated[
+        Optional[str],
+        typer.Option("--eval-model", help="Model for evaluation/reranking"),
+    ] = None,
+    llm_base_url: Annotated[
+        Optional[str],
+        typer.Option("--llm-base-url", help="Base URL for OpenAI-compatible API"),
+    ] = None,
+    cache_path: Annotated[
+        Optional[str],
+        typer.Option("--cache-path", help="Path to SQLite cache file"),
+    ] = None,
+    no_cache: Annotated[
+        bool,
+        typer.Option("--no-cache", help="Disable caching"),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
+) -> None:
+    """
+    Split a paragraph into sentences and find citations for each sentence.
+
+    Examples:
+        paper cite --text "Sentence one. Sentence two."
+        paper cite --in notes.txt --out report.md --top-k 3
+        cat notes.txt | paper cite --top-k 2
+    """
+    from pathlib import Path
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+
+    from papercli.config import Settings
+    from papercli.output import format_citation_report
+    from papercli.pipeline import run_pipeline
+
+    if top_k < 1:
+        console.print("[red]Error:[/red] --top-k must be >= 1")
+        raise typer.Exit(1)
+
+    # Parse sources
+    source_list = [s.strip().lower() for s in sources.split(",") if s.strip()]
+    valid_sources = {"pubmed", "openalex", "scholar", "arxiv"}
+    for src in source_list:
+        if src not in valid_sources:
+            console.print(f"[red]Error:[/red] Unknown source '{src}'. Valid: {', '.join(valid_sources)}")
+            raise typer.Exit(1)
+
+    if prefilter_k < top_k:
+        if verbose and not quiet:
+            console.print(
+                f"[dim]Adjusting --prefilter-k from {prefilter_k} to {top_k} to match top-k[/dim]"
+            )
+        prefilter_k = top_k
+
+    # Read input text
+    try:
+        text = _read_cite_input(input_file, input_text)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to read input: {e}")
+        raise typer.Exit(1)
+
+    sentences = split_sentences(text)
+    if not sentences:
+        console.print("[red]Error:[/red] No sentences found in input")
+        raise typer.Exit(1)
+
+    # Build settings
+    settings = Settings(
+        intent_model=intent_model,
+        eval_model=eval_model,
+        llm_base_url=llm_base_url,
+        cache_path=cache_path,
+        cache_enabled=not no_cache,
+    )
+
+    # Run per-sentence searches
+    show_progress = not quiet
+    sentence_results = []
+    total = len(sentences)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=20),
+        TaskProgressColumn(),
+        console=console,
+        disable=not show_progress,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("[cyan]Finding citations...", total=total)
+
+        for index, sentence in enumerate(sentences, 1):
+            if show_progress:
+                preview = sentence.strip()
+                if len(preview) > 60:
+                    preview = preview[:57] + "..."
+                progress.update(
+                    task,
+                    description=f"[cyan]Sentence {index}/{total}: {preview}",
+                )
+
+            try:
+                results = run_pipeline(
+                    query=sentence,
+                    sources=source_list,
+                    top_n=top_k,
+                    max_per_source=max_per_source,
+                    prefilter_k=prefilter_k,
+                    settings=settings,
+                    verbose=verbose,
+                    quiet=True,
+                    show_all=False,
+                )
+                recommended = None
+                if results:
+                    recommended = max(results, key=lambda r: (r.meets_need, r.score))
+                sentence_results.append(
+                    {
+                        "sentence": sentence,
+                        "results": results,
+                        "recommended": recommended,
+                        "error": None,
+                    }
+                )
+            except Exception as e:
+                error_text = str(e).strip() or repr(e)
+                sentence_results.append(
+                    {
+                        "sentence": sentence,
+                        "results": [],
+                        "recommended": None,
+                        "error": error_text,
+                    }
+                )
+
+            progress.advance(task, 1)
+
+        progress.update(task, description="[green]✓ Citation report complete")
+
+    report = format_citation_report(sentence_results, source_list, top_k)
+    out_path = Path(out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(report + ("\n" if not report.endswith("\n") else ""), encoding="utf-8")
+
+    if show_progress:
+        console.print(f"[green]✓ Wrote citation report to {out_path}[/green]")
 
 
 @app.command()
