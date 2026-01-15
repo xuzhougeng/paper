@@ -374,13 +374,21 @@ async def fetch_pdf_url(
 
     # Try Unpaywall first
     if not skip_unpaywall:
-        unpaywall = UnpaywallClient(settings)
         try:
-            result = await unpaywall.lookup(doi)
-            if result.pdf_url:
-                return result
-        finally:
-            await unpaywall.close()
+            unpaywall = UnpaywallClient(settings)
+            try:
+                result = await unpaywall.lookup(doi)
+                if result.pdf_url:
+                    return result
+            finally:
+                await unpaywall.close()
+        except ValueError as e:
+            # Unpaywall email not configured - record error and continue to PMC fallback
+            result = PDFResult(
+                doi=doi,
+                source="none",
+                error=f"Unpaywall skipped: {e}",
+            )
 
     # Fall back to PMC if no direct PDF from Unpaywall
     if not skip_pmc and not result.pdf_url:

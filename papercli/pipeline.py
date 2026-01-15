@@ -148,7 +148,7 @@ async def _run_pipeline_async(
     from papercli.rank import coarse_rank, deduplicate
 
     # Initialize components
-    cache = Cache(settings.cache_path) if settings.cache_enabled else None
+    cache = Cache(settings.get_cache_path()) if settings.cache_enabled else None
     llm = LLMClient(settings)
 
     show_progress = not quiet
@@ -212,7 +212,7 @@ async def _run_pipeline_async(
 
             # Step 2: Multi-source search (0% -> 50%)
             progress.update(main_task, description=f"[cyan]Step 2/5: Searching {len(sources)} sources...")
-            papers = await _search_all_sources(sources, intent, max_per_source, cache, verbose, progress)
+            papers = await _search_all_sources(sources, intent, max_per_source, cache, settings, verbose, progress)
             progress.update(main_task, completed=50)
 
             if not papers:
@@ -308,6 +308,7 @@ async def _search_all_sources(
     intent: QueryIntent,
     max_per_source: int,
     cache: "Cache | None",
+    settings: "Settings",
     verbose: bool,
     progress: Progress | None = None,
 ) -> list[Paper]:
@@ -317,13 +318,6 @@ async def _search_all_sources(
     from papercli.sources.pubmed import PubMedSource
     from papercli.sources.scholar import ScholarSource
 
-    source_map = {
-        "pubmed": PubMedSource,
-        "openalex": OpenAlexSource,
-        "scholar": ScholarSource,
-        "arxiv": ArxivSource,
-    }
-
     source_names = {
         "pubmed": "PubMed",
         "openalex": "OpenAlex",
@@ -331,11 +325,23 @@ async def _search_all_sources(
         "arxiv": "arXiv",
     }
 
+    # Build sources with API keys from settings
+    def build_source(src_name: str):
+        if src_name == "pubmed":
+            return PubMedSource(cache=cache, api_key=settings.get_ncbi_api_key())
+        elif src_name == "openalex":
+            return OpenAlexSource(cache=cache, email=settings.api_keys.openalex_email)
+        elif src_name == "scholar":
+            return ScholarSource(cache=cache, api_key=settings.get_serpapi_key())
+        elif src_name == "arxiv":
+            return ArxivSource(cache=cache)
+        return None
+
     tasks = []
     active_sources = []
     for src_name in sources:
-        if src_name in source_map:
-            source = source_map[src_name](cache=cache)
+        source = build_source(src_name)
+        if source:
             tasks.append(source.search(intent, max_results=max_per_source))
             active_sources.append(src_name)
 

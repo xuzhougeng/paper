@@ -67,9 +67,21 @@ async def rerank_with_llm(
     semaphore = asyncio.Semaphore(5)  # Max 5 concurrent evaluations
 
     async def evaluate_with_semaphore(index: int, paper: Paper) -> tuple[int, EvalResult]:
+        """Evaluate a paper with semaphore; always returns (index, result) even on error."""
         async with semaphore:
-            result = await _evaluate_paper(query, paper, llm, cache)
-            return index, result
+            try:
+                result = await _evaluate_paper(query, paper, llm, cache)
+                return index, result
+            except Exception as e:
+                # Fallback result preserving the correct index
+                return index, EvalResult(
+                    paper=paper,
+                    score=1.0,
+                    meets_need=False,
+                    evidence_quote=paper.title,
+                    evidence_field="title",
+                    short_reason=f"Evaluation failed: {str(e)[:40]}",
+                )
 
     # Create tasks
     tasks = [
@@ -80,19 +92,8 @@ async def rerank_with_llm(
     # Process results as they complete
     completed = 0
     for coro in asyncio.as_completed(tasks):
-        try:
-            index, result = await coro
-            eval_results.append((index, result))
-        except Exception as e:
-            # This shouldn't happen as _evaluate_paper handles exceptions
-            eval_results.append((completed, EvalResult(
-                paper=papers[completed],
-                score=1.0,
-                meets_need=False,
-                evidence_quote=papers[completed].title,
-                evidence_field="title",
-                short_reason="Evaluation failed",
-            )))
+        index, result = await coro
+        eval_results.append((index, result))
 
         completed += 1
         if progress_callback:

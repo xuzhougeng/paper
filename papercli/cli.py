@@ -939,7 +939,7 @@ async def _run_gen_query(
     from papercli.query import generate_platform_query
 
     # Initialize components
-    cache = Cache(settings.cache_path) if settings.cache_enabled else None
+    cache = Cache(settings.get_cache_path()) if settings.cache_enabled else None
     llm = LLMClient(settings)
 
     show_progress = not quiet
@@ -1734,7 +1734,7 @@ async def _run_slide(
     show_progress = not quiet
 
     # Initialize components
-    cache = Cache(settings.cache_path) if settings.cache_enabled else None
+    cache = Cache(settings.get_cache_path()) if settings.cache_enabled else None
     client = GeminiClient(settings)
 
     try:
