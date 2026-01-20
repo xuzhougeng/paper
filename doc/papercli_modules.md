@@ -549,7 +549,7 @@ Top-N 输出
 ### `structure.py`
 **功能**: 结构化解析 (二次解析)
 
-将页面级 JSONL 转换为数据库友好的结构化 JSON。
+将页面级 JSONL 转换为数据库友好的结构化 JSON，并支持生成带 YAML front matter 的 Markdown 输出。
 
 #### 核心功能
 
@@ -558,9 +558,22 @@ Top-N 输出
    - 提取 title、abstract、methods、results 等字段
    - 分离主图表与补充图表
    - 关联图表与图例
+   - 提取元数据 (authors、keywords、journal、date、doi)
    - 返回 `StructuredPaper` 模型
 
-2. **输出字段**
+2. **`structured_paper_to_markdown(paper)`**
+   - 将 `StructuredPaper` 渲染为 Markdown 文档
+   - 顶部包含 YAML front matter（元数据）
+   - 便于导入 Obsidian、Hugo、Jekyll 等工具
+
+3. **元数据抽取函数（启发式，best-effort）**
+   - `extract_doi(pages)`: 从前几页抽取 DOI（优先匹配带 `DOI:` 标签的行）
+   - `extract_date(pages)`: 抽取发表日期，支持 ISO 格式、`Month DD, YYYY` 等，尝试规范化为 `YYYY-MM-DD`
+   - `extract_keywords(pages)`: 从 `Keywords:` 行抽取关键词列表
+   - `extract_journal(pages)`: 抽取期刊名或预印本服务器（bioRxiv/medRxiv/arXiv）
+   - `extract_authors(pages, title)`: 从标题后的行抽取作者名，过滤机构/邮箱
+
+4. **输出字段（JSON 格式）**
    - `title`: 标题
    - `abstract`: 摘要
    - `methods`: 方法部分
@@ -571,9 +584,47 @@ Top-N 输出
    - `main_tables`: 主表列表
    - `supp_figures`: 补充图列表
    - `supp_tables`: 补充表列表
+   - `other_sections`: 其他章节（introduction、discussion 等）
    - `warnings`: 解析警告
 
+5. **元数据字段（仅 Markdown 输出，JSON 默认排除）**
+   - `authors`: 作者列表
+   - `keywords`: 关键词列表
+   - `journal`: 期刊/来源
+   - `date`: 发表日期
+   - `doi`: DOI 标识符
+
+#### YAML Front Matter 示例
+
+`paper structure result.jsonl --out structured.md` 生成的 Markdown 顶部包含：
+
+```yaml
+---
+title: "Paper Title"
+author:
+  - John Smith
+  - Jane Doe
+abstract: |
+  This is the abstract text...
+keywords:
+  - machine learning
+  - bioinformatics
+journal: Nature Methods
+date: 2024-03-15
+doi: 10.1234/example
+doc2x_uid: "019b9d84-..."
+source_path: "/path/to/paper.pdf"
+page_count: 12
+---
+```
+
 #### 模型定义
+
+- **`StructuredPaper`**: 结构化论文
+  - 核心字段：`title`、`abstract`、`methods`、`results`、`references`、`appendix`
+  - 图表：`main_figures`、`main_tables`、`supp_figures`、`supp_tables`
+  - 元数据（`exclude=True`）：`authors`、`keywords`、`journal`、`date`、`doi`
+  - 追溯信息：`doc2x_uid`、`source_path`、`page_count`、`warnings`
 
 - **`ExtractedFigure`**: 图
   - `figure_id`: 图编号 (如 "Figure 1")
@@ -587,10 +638,14 @@ Top-N 输出
   - `table_id`: 表编号 (如 "Table 1")
   - `caption`: 表标题
   - `page_index`/`page_no`: 页码
-  - `markdown_content`: Markdown 表格内容
+  - `html`: HTML 表格内容
+  - `image_urls`: 图片 URL（如果表是图片）
   - `is_supplementary`: 是否为补充表
 
 #### 特性
+- **YAML front matter**: Markdown 输出顶部包含元数据，兼容静态站点生成器和笔记工具
+- **元数据自动抽取**: DOI、日期、作者、关键词、期刊（best-effort 启发式）
+- **JSON/Markdown 分离**: 元数据字段默认从 JSON 输出排除（`Field(exclude=True)`），仅 Markdown 可见
 - 跨页图例关联
 - 补充材料识别 (S1、S2 等)
 - 尽力而为策略 (best-effort)

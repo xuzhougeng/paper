@@ -224,6 +224,28 @@ paper structure result.jsonl --out structured.md
 # (equivalent) paper structure result.jsonl --format md --out structured.md
 ```
 
+**Markdown output with YAML front matter**: When using `--format md`, the output includes a YAML front matter block at the beginning with metadata fields (title, author, abstract, keywords, journal, date, doi) extracted via best-effort heuristics. This makes the output compatible with static site generators (Hugo, Jekyll) and note-taking tools like Obsidian.
+
+```yaml
+---
+title: "Paper Title"
+author:
+  - John Smith
+  - Jane Doe
+abstract: |
+  This is the abstract text...
+keywords:
+  - machine learning
+  - bioinformatics
+journal: Nature Methods
+date: 2024-03-15
+doi: 10.1234/example
+doc2x_uid: "..."
+source_path: "/path/to/paper.pdf"
+page_count: 12
+---
+```
+
 ### Download PDF by DOI
 
 Use `fetch-pdf` to download open-access PDFs using a DOI. The command first queries [Unpaywall](https://unpaywall.org/) for direct PDF links, then falls back to [PubMed Central (PMC)](https://pmc.ncbi.nlm.nih.gov/) if needed.

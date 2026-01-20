@@ -126,6 +126,25 @@ paper extract paper.pdf --out result.jsonl --image-dir ./images
 paper structure result.jsonl --out structured.md
 ```
 
+生成的 `structured.md` 顶部包含 YAML front matter，包括自动提取的元数据（title、author、abstract、keywords、journal、date、doi 等），便于导入 Obsidian、Hugo、Jekyll 等工具：
+
+```yaml
+---
+title: "Paper Title"
+author:
+  - John Smith
+  - Jane Doe
+abstract: |
+  摘要内容...
+keywords:
+  - keyword1
+  - keyword2
+journal: Nature Methods
+date: 2024-03-15
+doi: 10.1234/example
+---
+```
+
 ## 制作单页Slider
 
 分析markdown文本输入，基于亮点制作单页的Slider.

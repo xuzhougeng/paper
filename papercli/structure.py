@@ -75,6 +75,13 @@ class StructuredPaper(BaseModel):
     other_sections: dict[str, str] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
+    # Metadata fields for YAML front matter (excluded from JSON output by default)
+    authors: list[str] = Field(default_factory=list, exclude=True)
+    keywords: list[str] = Field(default_factory=list, exclude=True)
+    journal: str | None = Field(default=None, exclude=True)
+    date: str | None = Field(default=None, exclude=True)
+    doi: str | None = Field(default=None, exclude=True)
+
 
 # =============================================================================
 # Regex helpers
@@ -92,6 +99,350 @@ _FIGURE_LEGEND_RE = re.compile(
     r"^(Figure|Fig\.?)\s+(S?\d+[A-Za-z]?)\s*[\.:]?\s*(.*)$", re.IGNORECASE
 )
 _TABLE_LEGEND_RE = re.compile(r"^Table\s+(S?\d+[A-Za-z]?)\s*[\.:]?\s*(.*)$", re.IGNORECASE)
+
+# DOI pattern: 10.XXXX/... (standard DOI format)
+_DOI_RE = re.compile(r"\b(10\.\d{4,}/[^\s\]>)\"']+)", re.IGNORECASE)
+# DOI with explicit label: "DOI:" or "doi:" followed by DOI
+_DOI_LABEL_RE = re.compile(r"(?:doi|DOI)\s*[:=]?\s*(10\.\d{4,}/[^\s\]>)\"']+)", re.IGNORECASE)
+
+# Date patterns
+_DATE_ISO_RE = re.compile(r"\b(\d{4}[-/]\d{1,2}[-/]\d{1,2})\b")
+_DATE_MDY_RE = re.compile(
+    r"\b((?:January|February|March|April|May|June|July|August|September|October|November|December)"
+    r"\s+\d{1,2},?\s+\d{4})\b",
+    re.IGNORECASE,
+)
+_DATE_DMY_RE = re.compile(
+    r"\b(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+    r",?\s+\d{4})\b",
+    re.IGNORECASE,
+)
+# Date with label (Published/Accepted/Received)
+_DATE_LABEL_RE = re.compile(
+    r"(?:Published|Accepted|Received|Date|Online)\s*[:;]?\s*"
+    r"(\d{4}[-/]\d{1,2}[-/]\d{1,2}|"
+    r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+    r"\s+\d{1,2},?\s+\d{4}|"
+    r"\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+    r",?\s+\d{4})",
+    re.IGNORECASE,
+)
+
+# Keywords pattern
+_KEYWORDS_RE = re.compile(
+    r"(?:Keywords?|KEY\s*WORDS?|Index\s+Terms?)\s*[:;]?\s*(.+)",
+    re.IGNORECASE,
+)
+
+# Journal/source patterns
+_JOURNAL_RE = re.compile(
+    r"(?:Journal|Published\s+in|Appeared\s+in)\s*[:;]?\s*(.+)",
+    re.IGNORECASE,
+)
+_PREPRINT_RE = re.compile(
+    r"\b(bioRxiv|medRxiv|arXiv|ChemRxiv|SSRN|PsyArXiv|OSF\s+Preprints?)\b",
+    re.IGNORECASE,
+)
+
+# Affiliation/institution markers (for filtering author lines)
+_AFFILIATION_MARKERS = re.compile(
+    r"(?:University|Institute|Department|College|School|Laboratory|Lab|Hospital|Center|Centre|"
+    r"Faculty|Division|Unit|Research|@|\.edu|\.org|\.ac\.|\.gov)",
+    re.IGNORECASE,
+)
+
+# Major section headings that mark end of author block
+_SECTION_HEADING_MARKERS = {
+    "ABSTRACT", "SUMMARY", "INTRODUCTION", "BACKGROUND", "KEYWORDS", "KEY WORDS",
+    "METHODS", "MATERIALS", "RESULTS", "DISCUSSION", "CONCLUSION", "CONCLUSIONS",
+    "REFERENCES", "ACKNOWLEDGEMENTS", "ACKNOWLEDGMENTS", "FUNDING", "CONFLICTS",
+}
+
+
+# =============================================================================
+# Metadata extraction (best-effort heuristics)
+# =============================================================================
+
+
+def extract_doi(pages: list[PageRecord], *, max_pages: int = 5) -> str | None:
+    """
+    Best-effort DOI extraction from early pages.
+
+    Prioritizes DOIs with explicit labels (e.g., "DOI: 10.xxx/...").
+    """
+    texts = [p.text for p in pages[:max_pages]]
+
+    # First try: labeled DOI (more reliable)
+    for text in texts:
+        for line in text.splitlines():
+            m = _DOI_LABEL_RE.search(line)
+            if m:
+                doi = m.group(1).rstrip(".,;)")
+                return doi
+
+    # Second try: any DOI pattern
+    for text in texts:
+        m = _DOI_RE.search(text)
+        if m:
+            doi = m.group(1).rstrip(".,;)")
+            return doi
+
+    return None
+
+
+def extract_date(pages: list[PageRecord], *, max_pages: int = 5) -> str | None:
+    """
+    Best-effort date extraction from early pages.
+
+    Prioritizes dates with labels (Published/Accepted/Received).
+    Attempts to normalize to YYYY-MM-DD format.
+    """
+    texts = [p.text for p in pages[:max_pages]]
+
+    # First try: labeled date
+    for text in texts:
+        for line in text.splitlines():
+            m = _DATE_LABEL_RE.search(line)
+            if m:
+                return _normalize_date(m.group(1))
+
+    # Second try: ISO date
+    for text in texts:
+        m = _DATE_ISO_RE.search(text)
+        if m:
+            return _normalize_date(m.group(1))
+
+    # Third try: Month DD, YYYY
+    for text in texts:
+        m = _DATE_MDY_RE.search(text)
+        if m:
+            return _normalize_date(m.group(1))
+
+    # Fourth try: DD Month YYYY
+    for text in texts:
+        m = _DATE_DMY_RE.search(text)
+        if m:
+            return _normalize_date(m.group(1))
+
+    return None
+
+
+def _normalize_date(date_str: str) -> str:
+    """Attempt to normalize date to YYYY-MM-DD format."""
+    import calendar
+
+    date_str = date_str.strip()
+
+    # Already ISO-like: YYYY-MM-DD or YYYY/MM/DD
+    m = re.match(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", date_str)
+    if m:
+        y, mo, d = m.groups()
+        return f"{y}-{int(mo):02d}-{int(d):02d}"
+
+    # Month DD, YYYY or Month DD YYYY
+    months = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
+    m = re.match(r"([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})", date_str)
+    if m:
+        month_name, day, year = m.groups()
+        month_num = months.get(month_name.lower())
+        if month_num:
+            return f"{year}-{month_num:02d}-{int(day):02d}"
+
+    # DD Month YYYY
+    m = re.match(r"(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})", date_str)
+    if m:
+        day, month_name, year = m.groups()
+        month_num = months.get(month_name.lower())
+        if month_num:
+            return f"{year}-{month_num:02d}-{int(day):02d}"
+
+    # Can't normalize, return as-is
+    return date_str
+
+
+def extract_keywords(pages: list[PageRecord], *, max_pages: int = 5) -> list[str]:
+    """
+    Best-effort keywords extraction from early pages.
+
+    Looks for "Keywords:" or similar labels and splits by comma/semicolon.
+    """
+    texts = [p.text for p in pages[:max_pages]]
+
+    for text in texts:
+        for line in text.splitlines():
+            m = _KEYWORDS_RE.match(line.strip())
+            if m:
+                raw = m.group(1).strip()
+                # Split by comma or semicolon, clean up
+                keywords = re.split(r"[;,]", raw)
+                keywords = [k.strip().strip(".").strip() for k in keywords if k.strip()]
+                # Filter out empty or very long "keywords" (likely parsing errors)
+                keywords = [k for k in keywords if k and len(k) < 100]
+                if keywords:
+                    return keywords
+
+    return []
+
+
+def extract_journal(pages: list[PageRecord], *, max_pages: int = 5) -> str | None:
+    """
+    Best-effort journal/source extraction from early pages.
+
+    Looks for explicit "Journal:" labels or preprint server mentions.
+    """
+    texts = [p.text for p in pages[:max_pages]]
+
+    # First try: explicit label
+    for text in texts:
+        for line in text.splitlines():
+            m = _JOURNAL_RE.match(line.strip())
+            if m:
+                journal = m.group(1).strip().rstrip(".,;")
+                if journal and len(journal) < 200:
+                    return journal
+
+    # Second try: preprint server mention
+    for text in texts:
+        m = _PREPRINT_RE.search(text)
+        if m:
+            return m.group(1)
+
+    return None
+
+
+def extract_authors(
+    pages: list[PageRecord],
+    title: str | None,
+    *,
+    max_pages: int = 2,
+) -> list[str]:
+    """
+    Best-effort author extraction from early pages.
+
+    Strategy: Find lines between the title and the first major section heading,
+    filter out affiliations/emails, split by common separators.
+    """
+    if not pages:
+        return []
+
+    # Combine text from early pages
+    combined = "\n".join(p.text for p in pages[:max_pages])
+    lines = combined.splitlines()
+
+    # Find title line index (if title is provided)
+    title_idx = -1
+    if title:
+        title_lower = title.lower().strip()
+        for i, line in enumerate(lines):
+            # Check if line contains the title (allowing for markdown heading)
+            line_clean = re.sub(r"^#+\s*", "", line).strip().lower()
+            if title_lower in line_clean or line_clean in title_lower:
+                title_idx = i
+                break
+
+    # Start searching from after the title (or from beginning if not found)
+    start_idx = title_idx + 1 if title_idx >= 0 else 0
+
+    # Collect potential author lines
+    author_candidates: list[str] = []
+    for i in range(start_idx, min(len(lines), start_idx + 50)):
+        line = lines[i].strip()
+        if not line:
+            continue
+
+        # Stop at section heading
+        line_upper = re.sub(r"^#+\s*", "", line).upper().strip()
+        if line_upper in _SECTION_HEADING_MARKERS:
+            break
+
+        # Stop at obvious non-author content
+        if _HEADING_RE.match(line) and not _is_likely_author_line(line):
+            # Check if it's a major heading
+            heading_text = re.sub(r"^#+\s*", "", line).upper().strip()
+            if any(marker in heading_text for marker in _SECTION_HEADING_MARKERS):
+                break
+
+        # Skip lines that look like affiliations/institutions
+        if _AFFILIATION_MARKERS.search(line):
+            continue
+
+        # Skip lines that look like email addresses or URLs
+        if "@" in line or "http" in line.lower():
+            continue
+
+        # Skip lines that are too long (likely paragraphs, not author names)
+        if len(line) > 300:
+            continue
+
+        # Skip lines that start with numbers (likely affiliations or dates)
+        if re.match(r"^\d+\s", line):
+            continue
+
+        # Skip markdown images/links
+        if line.startswith("!") or line.startswith("<"):
+            continue
+
+        # This might be an author line
+        if _is_likely_author_line(line):
+            author_candidates.append(line)
+
+    # Parse author names from candidates
+    authors: list[str] = []
+    for candidate in author_candidates:
+        # Remove superscript markers (1,2,*,† etc.)
+        cleaned = re.sub(r"[¹²³⁴⁵⁶⁷⁸⁹⁰\*†‡§\d]+,?", "", candidate)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+        # Split by common separators
+        parts = re.split(r"\s*[,;]\s*|\s+and\s+|\s*&\s*", cleaned)
+        for part in parts:
+            name = part.strip().strip(",").strip()
+            # Basic name validation: at least 2 chars, not all digits
+            if name and len(name) >= 2 and not name.isdigit():
+                # Skip if it looks like an institution
+                if not _AFFILIATION_MARKERS.search(name):
+                    authors.append(name)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_authors: list[str] = []
+    for a in authors:
+        a_lower = a.lower()
+        if a_lower not in seen:
+            seen.add(a_lower)
+            unique_authors.append(a)
+
+    return unique_authors
+
+
+def _is_likely_author_line(line: str) -> bool:
+    """Check if a line is likely to contain author names."""
+    # Remove heading markers
+    text = re.sub(r"^#+\s*", "", line).strip()
+
+    if not text:
+        return False
+
+    # Too short or too long
+    if len(text) < 3 or len(text) > 500:
+        return False
+
+    # Contains typical author-like patterns:
+    # - Multiple capitalized words
+    # - Comma-separated names
+    # - Contains "and" between names
+
+    # Check for capitalized words (names typically start with capitals)
+    words = text.split()
+    cap_words = sum(1 for w in words if w and w[0].isupper())
+    if cap_words >= 2:
+        return True
+
+    # Contains comma suggesting multiple names
+    if "," in text and cap_words >= 1:
+        return True
+
+    return False
 
 
 # =============================================================================
@@ -188,6 +539,13 @@ def structure_from_pages(pages: list[PageRecord]) -> StructuredPaper:
     # Keep other sections (introduction/discussion/etc.) for completeness
     other_sections = {k: v for k, v in section_map.items() if v and k not in ("title",)}
 
+    # Extract metadata for YAML front matter (best-effort heuristics)
+    doi = extract_doi(pages)
+    date = extract_date(pages)
+    keywords = extract_keywords(pages)
+    journal = extract_journal(pages)
+    authors = extract_authors(pages, title)
+
     return StructuredPaper(
         doc2x_uid=uid,
         source_path=source_path,
@@ -204,6 +562,12 @@ def structure_from_pages(pages: list[PageRecord]) -> StructuredPaper:
         supp_tables=supp_tables,
         other_sections=other_sections,
         warnings=warnings,
+        # Metadata fields
+        authors=authors,
+        keywords=keywords,
+        journal=journal,
+        date=date,
+        doi=doi,
     )
 
 
@@ -213,6 +577,10 @@ def structured_paper_to_markdown(paper: StructuredPaper) -> str:
 
     This is a convenience formatter for notes/review. The JSON output remains the
     preferred format for database ingestion.
+
+    The output includes a YAML front matter block with metadata fields
+    (title, author, abstract, keywords, journal, date, doi, etc.) for
+    compatibility with static site generators and note-taking tools like Obsidian.
     """
 
     def section(title: str, body: str | None) -> str:
@@ -222,11 +590,57 @@ def structured_paper_to_markdown(paper: StructuredPaper) -> str:
 
     lines: list[str] = []
 
+    # ==========================================================================
+    # YAML front matter
+    # ==========================================================================
+    lines.append("---\n")
+
     title = paper.title.strip() if paper.title else "Untitled"
+    lines.append(f"title: {_yaml_quote_string(title)}\n")
+
+    # Author list (YAML list format)
+    if paper.authors:
+        lines.append("author:\n")
+        for author in paper.authors:
+            lines.append(f"  - {_yaml_quote_string(author)}\n")
+
+    # Abstract as block scalar
+    if paper.abstract:
+        abstract_clean = paper.abstract.strip().replace("\r\n", "\n").replace("\r", "\n")
+        lines.append("abstract: |\n")
+        for line in abstract_clean.splitlines():
+            lines.append(f"  {line}\n")
+
+    # Keywords list (YAML list format)
+    if paper.keywords:
+        lines.append("keywords:\n")
+        for kw in paper.keywords:
+            lines.append(f"  - {_yaml_quote_string(kw)}\n")
+
+    # Journal
+    if paper.journal:
+        lines.append(f"journal: {_yaml_quote_string(paper.journal)}\n")
+
+    # Date
+    if paper.date:
+        lines.append(f"date: {_yaml_quote_string(paper.date)}\n")
+
+    # DOI
+    if paper.doi:
+        lines.append(f"doi: {_yaml_quote_string(paper.doi)}\n")
+
+    # Additional metadata for traceability
+    lines.append(f"doc2x_uid: {_yaml_quote_string(paper.doc2x_uid)}\n")
+    lines.append(f"source_path: {_yaml_quote_string(paper.source_path)}\n")
+    lines.append(f"page_count: {paper.page_count}\n")
+
+    lines.append("---\n")
+    lines.append("\n")
+
+    # ==========================================================================
+    # Markdown body
+    # ==========================================================================
     lines.append(f"# {title}\n")
-    lines.append(f"- doc2x_uid: `{paper.doc2x_uid}`\n")
-    lines.append(f"- source_path: `{paper.source_path}`\n")
-    lines.append(f"- page_count: {paper.page_count}\n")
     lines.append("\n")
 
     if paper.warnings:
@@ -826,5 +1240,39 @@ def _clean_text_block(text: str | None) -> str | None:
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n")
     cleaned = _collapse_blank_lines(cleaned)
     return cleaned.strip() if cleaned.strip() else None
+
+
+def _yaml_quote_string(s: str) -> str:
+    """
+    Quote a string for YAML if it contains special characters.
+
+    Returns the string quoted with double quotes if it contains characters
+    that could cause YAML parsing issues, otherwise returns it as-is.
+    """
+    if not s:
+        return '""'
+
+    # Characters that require quoting in YAML
+    # - Leading/trailing whitespace
+    # - Colons followed by space
+    # - Hash/pound signs
+    # - Various special YAML indicators
+    needs_quote = (
+        s != s.strip()
+        or s.startswith(("'", '"', "-", "[", "{", ">", "|", "*", "&", "!", "%", "@", "`"))
+        or ": " in s
+        or " #" in s
+        or s.startswith("#")
+        or "\n" in s
+        or s.lower() in ("true", "false", "yes", "no", "null", "~")
+        or re.match(r"^\d+(\.\d+)?$", s)  # Looks like a number
+    )
+
+    if needs_quote:
+        # Escape double quotes and backslashes
+        escaped = s.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    return s
 
 
