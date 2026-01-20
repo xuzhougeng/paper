@@ -17,11 +17,23 @@ A command-line tool for searching academic papers using LLM-powered query unders
 
 ## Installation
 
-Install PaperCLI from Github.
+**Requirements**: Python 3.12+
+
+It is recommended to use [uv](https://docs.astral.sh/uv/) for installation and virtual environment management:
 
 ```bash
-pip install git+https://github.com/xuzhougeng/paper.git
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create and activate a Python 3.12 virtual environment
+uv venv --python 3.12
+source .venv/bin/activate  # Linux/macOS
+# Or .venv\Scripts\activate  # Windows
+
+# Install PaperCLI from GitHub
+uv pip install git+https://github.com/xuzhougeng/paper.git
 ```
+
 
 ## Configuration
 
@@ -58,8 +70,6 @@ export GEMINI_API_KEY="your-gemini-key"  # Get from Google AI Studio
 export LLM_BASE_URL="https://api.openai-proxy.org/v1"  # for OpenAI
 export GEMINI_BASE_URL="https://api.openai-proxy.org/google/v1beta"  # for Google
 ```
-
-
 
 Or create a `~/.papercli.toml` configuration file:
 
