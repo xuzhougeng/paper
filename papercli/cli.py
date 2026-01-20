@@ -136,6 +136,191 @@ app = typer.Typer(
 )
 console = Console()
 
+# ---------------------------------------------------------------------------
+# Knowledge base subcommand group
+# ---------------------------------------------------------------------------
+
+base_app = typer.Typer(
+    name="base",
+    help="Knowledge base management commands.",
+    no_args_is_help=True,
+)
+app.add_typer(base_app, name="base")
+
+
+@base_app.command("create")
+def base_create(
+    name: Annotated[str, typer.Argument(help="Name of the knowledge base to create")],
+    path: Annotated[
+        Optional[str],
+        typer.Option("--path", "-p", help="Directory path for the knowledge base"),
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+) -> None:
+    """
+    Create a new knowledge base.
+
+    Example:
+        paper base create my_papers
+        paper base create my_kb --path ./data/kb
+    """
+    console.print(f"[yellow]TODO:[/yellow] Create knowledge base '{name}'")
+    if path:
+        console.print(f"[dim]Path: {path}[/dim]")
+    raise typer.Exit(0)
+
+
+@base_app.command("add")
+def base_add(
+    source: Annotated[str, typer.Argument(help="Path to PDF, JSONL, or markdown file to add")],
+    base_name: Annotated[
+        Optional[str],
+        typer.Option("--base", "-b", help="Target knowledge base name (default: default)"),
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+) -> None:
+    """
+    Add a document to the knowledge base.
+
+    Supports PDF, JSONL (from `paper extract`), or markdown files.
+
+    Example:
+        paper base add paper.pdf
+        paper base add result.jsonl --base my_kb
+        paper base add article.md
+    """
+    console.print(f"[yellow]TODO:[/yellow] Add '{source}' to knowledge base")
+    if base_name:
+        console.print(f"[dim]Target base: {base_name}[/dim]")
+    raise typer.Exit(0)
+
+
+@base_app.command("query")
+def base_query(
+    query: Annotated[str, typer.Argument(help="Natural language query about the knowledge base")],
+    base_name: Annotated[
+        Optional[str],
+        typer.Option("--base", "-b", help="Knowledge base name to query (default: default)"),
+    ] = None,
+    top_k: Annotated[
+        int,
+        typer.Option("--top-k", "-k", help="Number of relevant documents to retrieve"),
+    ] = 5,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: table, json, or md"),
+    ] = "md",
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+) -> None:
+    """
+    Query the knowledge base using natural language.
+
+    Uses intent recognition, information retrieval, and summarization
+    to answer questions about the stored documents.
+
+    Example:
+        paper base query "哪篇文献提到了植物的开花"
+        paper base query "找到 zhougeng xu 参与发表的文章"
+        paper base query "知识库里包括多少篇文献" --format json
+    """
+    console.print(f"[yellow]TODO:[/yellow] Query knowledge base with: '{query}'")
+    if base_name:
+        console.print(f"[dim]Target base: {base_name}[/dim]")
+    console.print(f"[dim]Top-K: {top_k}, Format: {output_format}[/dim]")
+    raise typer.Exit(0)
+
+
+@base_app.command("list")
+def base_list(
+    base_name: Annotated[
+        Optional[str],
+        typer.Option("--base", "-b", help="Knowledge base name (default: list all bases)"),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: table or json"),
+    ] = "table",
+) -> None:
+    """
+    List documents in the knowledge base.
+
+    If no base name is provided, lists all available knowledge bases.
+
+    Example:
+        paper base list
+        paper base list --base my_kb
+        paper base list --format json
+    """
+    if base_name:
+        console.print(f"[yellow]TODO:[/yellow] List documents in knowledge base '{base_name}'")
+    else:
+        console.print("[yellow]TODO:[/yellow] List all knowledge bases")
+    raise typer.Exit(0)
+
+
+@base_app.command("info")
+def base_info(
+    base_name: Annotated[
+        Optional[str],
+        typer.Option("--base", "-b", help="Knowledge base name (default: default)"),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: table or json"),
+    ] = "table",
+) -> None:
+    """
+    Show knowledge base statistics.
+
+    Displays information such as:
+    - Number of documents
+    - List of authors
+    - Topics/keywords
+    - Storage size
+
+    Example:
+        paper base info
+        paper base info --base my_kb --format json
+    """
+    console.print(f"[yellow]TODO:[/yellow] Show info for knowledge base")
+    if base_name:
+        console.print(f"[dim]Target base: {base_name}[/dim]")
+    raise typer.Exit(0)
+
+
+@base_app.command("remove")
+def base_remove(
+    doc_id: Annotated[str, typer.Argument(help="Document ID or path to remove")],
+    base_name: Annotated[
+        Optional[str],
+        typer.Option("--base", "-b", help="Knowledge base name (default: default)"),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Skip confirmation prompt"),
+    ] = False,
+) -> None:
+    """
+    Remove a document from the knowledge base.
+
+    Example:
+        paper base remove doc_123
+        paper base remove paper.pdf --base my_kb --force
+    """
+    console.print(f"[yellow]TODO:[/yellow] Remove '{doc_id}' from knowledge base")
+    if base_name:
+        console.print(f"[dim]Target base: {base_name}[/dim]")
+    raise typer.Exit(0)
+
 
 def version_callback(value: bool) -> None:
     if value:
