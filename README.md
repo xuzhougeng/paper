@@ -15,6 +15,23 @@ A command-line tool for searching academic papers using LLM-powered query unders
 - **Configurable models**: Use different LLM models for intent extraction vs evaluation
 - **Caching**: SQLite-based caching to avoid redundant API calls
 
+
+## SKILL
+
+PaperCLI skill files are stored in `skill/`. Install them into Cursor as either a personal or project skill.
+
+```bash
+# Personal skill (available across projects)
+mkdir -p ~/.cursor/skills
+cp -r skill ~/.cursor/skills/paper-cli
+
+# Project skill (only for this repo)
+mkdir -p .cursor/skills
+cp -r skill .cursor/skills/paper-cli
+```
+
+If you are using Claude-Code or Codex, replace `.cursor` with `.claude` or `.codex` in the above installation paths as appropriate.
+
 ## Installation
 
 **Requirements**: Python 3.12+
