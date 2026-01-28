@@ -317,12 +317,14 @@ async def _search_all_sources(
     from papercli.sources.openalex import OpenAlexSource
     from papercli.sources.pubmed import PubMedSource
     from papercli.sources.scholar import ScholarSource
+    from papercli.sources.zotero import ZoteroSource
 
     source_names = {
         "pubmed": "PubMed",
         "openalex": "OpenAlex",
         "scholar": "Google Scholar",
         "arxiv": "arXiv",
+        "zotero": "Zotero",
     }
 
     # Build sources with API keys from settings
@@ -335,6 +337,8 @@ async def _search_all_sources(
             return ScholarSource(cache=cache, api_key=settings.get_serpapi_key())
         elif src_name == "arxiv":
             return ArxivSource(cache=cache)
+        elif src_name == "zotero":
+            return ZoteroSource(cache=cache, settings=settings)
         return None
 
     tasks = []

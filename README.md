@@ -4,7 +4,7 @@ A command-line tool for searching academic papers using LLM-powered query unders
 
 ## Features
 
-- **Multi-source search**: PubMed, OpenAlex, Google Scholar (via SerpAPI), arXiv
+- **Multi-source search**: PubMed, OpenAlex, Google Scholar (via SerpAPI), arXiv, Zotero (personal library)
 - **LLM-powered query understanding**: Automatically extracts intent, expands synonyms, and translates queries
 - **Platform-specific query generation**: Generate optimized search queries for PubMed, Google Scholar, or Web of Science
 - **PDF text extraction**: Extract text from PDFs using Doc2X API with page-level JSONL output
@@ -61,8 +61,8 @@ Set the following environment variables:
 export LLM_API_KEY="sk-..."
 
 # Optional: Model configuration (defaults shown)
-export PAPERCLI_INTENT_MODEL="gpt-4o-mini"  # For query rewriting
-export PAPERCLI_EVAL_MODEL="gpt-4o"          # For paper evaluation
+export PAPERCLI_REASONING_MODEL="gpt-4o-mini"  # For reasoning tasks (query rewriting, segmentation)
+export PAPERCLI_INSTINCT_MODEL="gpt-4o"        # For instinct tasks (evaluation, reranking, review)
 
 # Optional: Required for Google Scholar search
 export SERPAPI_API_KEY="your-serpapi-key"
@@ -76,9 +76,13 @@ export NCBI_API_KEY="your-ncbi-key"       # Optional, improves PMC rate limits
 
 # Optional: Required for slide generation (paper slide command)
 export GEMINI_API_KEY="your-gemini-key"  # Get from Google AI Studio
+
+# Optional: Required for Zotero library search
+export ZOTERO_API_KEY="your-zotero-key"  # Get from https://www.zotero.org/settings/keys
+export ZOTERO_USER_ID="12345678"          # Your Zotero user ID (numeric)
 ```
 
-建议: PAPERCLI_INTENT_MODEL建议模型不能弱于gpt-4o, 最好是gpt-5等具有推理能力模型，这样子可以生成更好的检索词。
+建议: PAPERCLI_REASONING_MODEL建议模型不能弱于gpt-4o, 最好是gpt-5等具有推理能力模型，这样子可以生成更好的检索词。
 
 注: `paper find`需要配置OpenAI的API Key, `paper slide`命令需要用到谷歌的AI Studio的API Key.
 如果无法使用官方API，可以使用第三方中转商，例如我用的是[CloseAI](https://referer.shadowai.xyz/r/12432)，配置方法如下:
@@ -94,8 +98,8 @@ Or create a `~/.papercli.toml` configuration file:
 [llm]
 api_key = "sk-..."  # Required: OpenAI or compatible API key
 base_url = "https://api.openai.com/v1"
-intent_model = "gpt-4o-mini"  # Default: gpt-4o-mini (for query rewriting)
-eval_model = "gpt-4o"          # Default: gpt-4o (for paper evaluation)
+reasoning_model = "gpt-4o-mini"  # Default: gpt-4o-mini (for reasoning tasks: query rewriting, segmentation)
+instinct_model = "gpt-4o"        # Default: gpt-4o (for instinct tasks: evaluation, reranking, review)
 
 [cache]
 path = "~/.cache/papercli.sqlite"
@@ -117,6 +121,13 @@ api_key = "..."  # Optional: for slide generation
 # base_url = "https://api.openai-proxy.org/google/v1beta"  # Default proxy
 # text_model = "gemini-3-flash-preview"  # For highlight extraction
 # image_model = "gemini-3-pro-image-preview"  # For slide image generation
+
+[zotero]
+api_key = "..."   # Optional: for Zotero library search
+user_id = "..."   # Your Zotero user ID (numeric)
+# base_url = "https://api.zotero.org"  # Default
+# qmode = "titleCreatorYear"  # Query mode: titleCreatorYear or everything
+# item_type = "-attachment"   # Item type filter (- prefix excludes)
 ```
 
 ## Usage
@@ -137,7 +148,7 @@ paper find "machine learning for drug discovery" --top-n 10 --format json
 paper find "protein folding prediction" --sources pubmed,openalex
 
 # Use specific models
-paper find "neural networks" --intent-model gpt-4o-mini --eval-model gpt-4o
+paper find "neural networks" --reasoning-model gpt-4o-mini --instinct-model gpt-4o
 
 # Show all retrieved papers (skip LLM ranking)
 paper find "CRISPR therapy" --show-all
@@ -157,7 +168,7 @@ paper find "single cell RNA sequencing" --verbose
 ![How PaperCLI Works](assets/workflow.png)
 
 1. **Query Intent Extraction**: LLM analyzes your query to extract keywords, synonyms, and search intent
-2. **Multi-source Search**: Searches PubMed, OpenAlex, Scholar, and optionally arXiv in parallel
+2. **Multi-source Search**: Searches PubMed, OpenAlex, Scholar, arXiv, and optionally Zotero in parallel
 3. **Deduplication**: Removes duplicate papers using DOI, source IDs, and normalized titles
 4. **Coarse Ranking**: Uses lexical matching to reduce candidates to a manageable number
 5. **LLM Reranking**: Each candidate is evaluated by LLM for relevance, with evidence extraction
@@ -349,6 +360,74 @@ Options:
 - `--quiet/-q`: Suppress progress output
 
 **Note**: Requires `GEMINI_API_KEY` environment variable or `[gemini] api_key` in config file.
+
+### Review and critique papers
+
+Use `paper review` to analyze academic papers. The `critique` subcommand generates LLM-based peer reviews, while `lint` performs deterministic checks for common issues.
+
+#### Peer review (LLM-based)
+
+Generate a structured peer review for biology/biomedical papers:
+
+```bash
+# Generate a review from a text file
+paper review critique --in manuscript.txt
+
+# Output as JSON (for programmatic use)
+paper review critique --in paper.md --format json --out review.json
+
+# Pipe text from stdin
+cat abstract.txt | paper review critique --out feedback.md
+
+# Use a specific model
+paper review critique --in draft.txt --model gpt-4o
+```
+
+The review covers:
+- Summary of the paper's contribution
+- Strengths and weaknesses
+- Major concerns (experimental design, statistics, controls)
+- Questions for authors
+- Suggested experiments
+- Reproducibility and data availability
+- Ethics and compliance (if applicable)
+- Writing and clarity
+- Overall recommendation (accept/minor revision/major revision/reject)
+
+#### Lint checks (deterministic)
+
+Run deterministic lint checks on paper text:
+
+```bash
+# Run all lint rules
+paper review lint --in manuscript.md
+
+# Output as JSON
+paper review lint --in paper.txt --format json --out lint.json
+
+# Run specific rules only
+paper review lint --in draft.md --rules figure-table-ref,units-format
+
+# Exclude specific rules
+cat text.txt | paper review lint --exclude punctuation-mixed
+```
+
+Available rules:
+- `figure-table-ref`: Check for inconsistent Fig./Figure and Tab./Table references
+- `units-format`: Check number-unit spacing and percentage formatting
+- `term-consistency`: Check for inconsistent biology terms (RNA-seq, CRISPR-Cas9, etc.)
+- `punctuation-mixed`: Check for Chinese/English punctuation mixing
+- `case-title`: Check for inconsistent heading case style
+
+Options:
+- `--in PATH`: Input text file (reads from stdin if not provided)
+- `--out PATH`: Output report path (default: stdout for lint, `review.md` for critique)
+- `--format`: Output format: `md` (default) or `json`
+- `--rules`: Comma-separated list of rules to run (lint only)
+- `--exclude`: Comma-separated list of rules to exclude (lint only)
+- `--model`: Model for review (critique only, defaults to instinct_model)
+- `--verbose/-V`: Show detailed progress
+- `--quiet/-q`: Suppress progress output
 
 ## License
 

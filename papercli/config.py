@@ -13,8 +13,8 @@ class LLMConfig(BaseModel):
 
     base_url: str = Field(default="https://api.openai.com/v1")
     api_key: Optional[str] = Field(default=None)
-    intent_model: str = Field(default="gpt-4o-mini")
-    eval_model: str = Field(default="gpt-4o")
+    reasoning_model: str = Field(default="gpt-4o-mini")
+    instinct_model: str = Field(default="gpt-4o")
     timeout: float = Field(default=60.0)
     max_retries: int = Field(default=3)
 
@@ -64,6 +64,17 @@ class GeminiConfig(BaseModel):
     max_retries: int = Field(default=3)
 
 
+class ZoteroConfig(BaseModel):
+    """Zotero API configuration for personal library search."""
+
+    base_url: str = Field(default="https://api.zotero.org")
+    api_key: Optional[str] = Field(default=None)
+    user_id: Optional[str] = Field(default=None)
+    qmode: str = Field(default="titleCreatorYear")  # Query mode: titleCreatorYear or everything
+    item_type: str = Field(default="-attachment")  # Item type filter (- prefix excludes)
+    timeout: float = Field(default=30.0)
+
+
 class Settings(BaseModel):
     """Main settings container."""
 
@@ -75,10 +86,11 @@ class Settings(BaseModel):
     doc2x: Doc2XConfig = Field(default_factory=Doc2XConfig)
     unpaywall: UnpaywallConfig = Field(default_factory=UnpaywallConfig)
     gemini: GeminiConfig = Field(default_factory=GeminiConfig)
+    zotero: ZoteroConfig = Field(default_factory=ZoteroConfig)
 
     # CLI overrides (set directly from command line)
-    intent_model: Optional[str] = Field(default=None)
-    eval_model: Optional[str] = Field(default=None)
+    reasoning_model: Optional[str] = Field(default=None)
+    instinct_model: Optional[str] = Field(default=None)
     llm_base_url: Optional[str] = Field(default=None)
     cache_path: Optional[str] = Field(default=None)
     cache_enabled: bool = Field(default=True)
@@ -100,10 +112,10 @@ class Settings(BaseModel):
             self.llm.base_url = base_url
 
         # Model overrides from env
-        if intent_model := os.environ.get("PAPERCLI_INTENT_MODEL"):
-            self.llm.intent_model = intent_model
-        if eval_model := os.environ.get("PAPERCLI_EVAL_MODEL"):
-            self.llm.eval_model = eval_model
+        if reasoning_model := os.environ.get("PAPERCLI_REASONING_MODEL"):
+            self.llm.reasoning_model = reasoning_model
+        if instinct_model := os.environ.get("PAPERCLI_INSTINCT_MODEL"):
+            self.llm.instinct_model = instinct_model
 
         # API keys
         if serpapi_key := os.environ.get("SERPAPI_API_KEY"):
@@ -137,6 +149,14 @@ class Settings(BaseModel):
         if gemini_image_model := os.environ.get("GEMINI_IMAGE_MODEL"):
             self.gemini.image_model = gemini_image_model
 
+        # Zotero configuration
+        if zotero_api_key := os.environ.get("ZOTERO_API_KEY"):
+            self.zotero.api_key = zotero_api_key
+        if zotero_user_id := os.environ.get("ZOTERO_USER_ID"):
+            self.zotero.user_id = zotero_user_id
+        if zotero_base_url := os.environ.get("ZOTERO_BASE_URL"):
+            self.zotero.base_url = zotero_base_url
+
     def _load_from_config_file(self) -> None:
         """Load configuration from config file (~/.papercli.toml)."""
         config_paths = [
@@ -166,10 +186,10 @@ class Settings(BaseModel):
                 self.llm.api_key = llm_config["api_key"]
             if "base_url" in llm_config and not self.llm_base_url:
                 self.llm.base_url = llm_config["base_url"]
-            if "intent_model" in llm_config and not self.intent_model:
-                self.llm.intent_model = llm_config["intent_model"]
-            if "eval_model" in llm_config and not self.eval_model:
-                self.llm.eval_model = llm_config["eval_model"]
+            if "reasoning_model" in llm_config and not self.reasoning_model:
+                self.llm.reasoning_model = llm_config["reasoning_model"]
+            if "instinct_model" in llm_config and not self.instinct_model:
+                self.llm.instinct_model = llm_config["instinct_model"]
             if "timeout" in llm_config:
                 self.llm.timeout = llm_config["timeout"]
             if "max_retries" in llm_config:
@@ -225,12 +245,26 @@ class Settings(BaseModel):
             if "max_retries" in gemini_config:
                 self.gemini.max_retries = gemini_config["max_retries"]
 
+        if zotero_config := config_data.get("zotero"):
+            if "api_key" in zotero_config and not self.zotero.api_key:
+                self.zotero.api_key = zotero_config["api_key"]
+            if "user_id" in zotero_config and not self.zotero.user_id:
+                self.zotero.user_id = zotero_config["user_id"]
+            if "base_url" in zotero_config:
+                self.zotero.base_url = zotero_config["base_url"]
+            if "qmode" in zotero_config:
+                self.zotero.qmode = zotero_config["qmode"]
+            if "item_type" in zotero_config:
+                self.zotero.item_type = zotero_config["item_type"]
+            if "timeout" in zotero_config:
+                self.zotero.timeout = zotero_config["timeout"]
+
     def _apply_cli_overrides(self) -> None:
         """Apply CLI-provided overrides."""
-        if self.intent_model:
-            self.llm.intent_model = self.intent_model
-        if self.eval_model:
-            self.llm.eval_model = self.eval_model
+        if self.reasoning_model:
+            self.llm.reasoning_model = self.reasoning_model
+        if self.instinct_model:
+            self.llm.instinct_model = self.instinct_model
         if self.llm_base_url:
             self.llm.base_url = self.llm_base_url
         if self.cache_path:
@@ -238,13 +272,13 @@ class Settings(BaseModel):
         if not self.cache_enabled:
             self.cache.enabled = False
 
-    def get_intent_model(self) -> str:
-        """Get the model to use for intent extraction."""
-        return self.intent_model or self.llm.intent_model
+    def get_reasoning_model(self) -> str:
+        """Get the model to use for reasoning tasks (intent extraction, query rewriting, segmentation)."""
+        return self.reasoning_model or self.llm.reasoning_model
 
-    def get_eval_model(self) -> str:
-        """Get the model to use for evaluation/reranking."""
-        return self.eval_model or self.llm.eval_model
+    def get_instinct_model(self) -> str:
+        """Get the model to use for instinct tasks (evaluation, reranking, review critique)."""
+        return self.instinct_model or self.llm.instinct_model
 
     def get_cache_path(self) -> Path:
         """Get the resolved cache path."""
@@ -294,4 +328,12 @@ class Settings(BaseModel):
                 "or add [gemini] api_key = '...' to your config file."
             )
         return self.gemini.api_key
+
+    def get_zotero_api_key(self) -> Optional[str]:
+        """Get Zotero API key (optional)."""
+        return self.zotero.api_key
+
+    def get_zotero_user_id(self) -> Optional[str]:
+        """Get Zotero user ID (optional)."""
+        return self.zotero.user_id
 

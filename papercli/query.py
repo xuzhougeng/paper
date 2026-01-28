@@ -144,7 +144,7 @@ Please provide:
 If the original query is in Chinese, also provide **query_zh** with the Chinese version."""
 
     # Let LLMError propagate for proper diagnostics
-    intent = await llm.intent_completion(
+    intent = await llm.reasoning_completion(
         prompt=prompt,
         response_model=QueryIntent,
         system_prompt=INTENT_SYSTEM_PROMPT,
@@ -236,7 +236,7 @@ async def generate_platform_query(
 Remember to use proper {platform.upper()} syntax and keep the query practical (not overly complex)."""
 
     try:
-        response = await llm.intent_completion(
+        response = await llm.reasoning_completion(
             prompt=prompt,
             response_model=_PlatformQueryLLMResponse,
             system_prompt=platform_system,

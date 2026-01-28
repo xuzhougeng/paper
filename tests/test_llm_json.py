@@ -110,12 +110,12 @@ class TestJsonExtraction:
             llm = type('obj', (object,), {
                 'base_url': 'http://test',
                 'timeout': 30,
-                'intent_model': 'test',
+                'reasoning_model': 'test',
                 'max_retries': 3,
             })()
-            def get_intent_model(self):
+            def get_reasoning_model(self):
                 return "test"
-            def get_eval_model(self):
+            def get_instinct_model(self):
                 return "test"
 
         return LLMClient(MockSettings())
@@ -207,12 +207,12 @@ class TestCompleteJsonErrorDiagnostics:
             llm = type('obj', (object,), {
                 'base_url': 'https://test.example.com/v1',
                 'timeout': 30,
-                'intent_model': 'test-model',
+                'reasoning_model': 'test-model',
                 'max_retries': 3,
             })()
-            def get_intent_model(self):
+            def get_reasoning_model(self):
                 return "test-model"
-            def get_eval_model(self):
+            def get_instinct_model(self):
                 return "test-model"
         return MockSettings()
 

@@ -240,7 +240,7 @@ async def split_sentences_llm(
     Args:
         text: The text to segment
         llm_client: Initialized LLMClient instance
-        model: Optional model override (defaults to intent_model)
+        model: Optional model override (defaults to reasoning_model)
 
     Returns:
         List of segment texts
@@ -280,7 +280,7 @@ async def split_segments_llm(
     Args:
         text: The text to segment
         llm_client: Initialized LLMClient instance
-        model: Optional model override (defaults to intent_model)
+        model: Optional model override (defaults to reasoning_model)
 
     Returns:
         List of Segment objects with text, needs_citation, citation_reason, etc.
@@ -335,7 +335,7 @@ def find(
     top_n: Annotated[int, typer.Option("--top-n", "-n", help="Number of top results to return")] = 5,
     sources: Annotated[
         str,
-        typer.Option("--sources", "-s", help="Comma-separated list of sources: pubmed,openalex,scholar,arxiv"),
+        typer.Option("--sources", "-s", help="Comma-separated list of sources: pubmed,openalex,scholar,arxiv,zotero"),
     ] = "pubmed,openalex,scholar",
     max_per_source: Annotated[
         int,
@@ -345,13 +345,13 @@ def find(
         int,
         typer.Option("--prefilter-k", help="Number of candidates to send to LLM for reranking"),
     ] = 30,
-    intent_model: Annotated[
+    reasoning_model: Annotated[
         Optional[str],
-        typer.Option("--intent-model", help="Model for query rewriting/intent extraction"),
+        typer.Option("--reasoning-model", help="Model for reasoning tasks (query rewriting, intent extraction)"),
     ] = None,
-    eval_model: Annotated[
+    instinct_model: Annotated[
         Optional[str],
-        typer.Option("--eval-model", help="Model for evaluation/reranking"),
+        typer.Option("--instinct-model", help="Model for instinct tasks (evaluation, reranking)"),
     ] = None,
     llm_base_url: Annotated[
         Optional[str],
@@ -393,7 +393,7 @@ def find(
 
     # Parse sources
     source_list = [s.strip().lower() for s in sources.split(",") if s.strip()]
-    valid_sources = {"pubmed", "openalex", "scholar", "arxiv"}
+    valid_sources = {"pubmed", "openalex", "scholar", "arxiv", "zotero"}
     for src in source_list:
         if src not in valid_sources:
             console.print(f"[red]Error:[/red] Unknown source '{src}'. Valid: {', '.join(valid_sources)}")
@@ -406,8 +406,8 @@ def find(
 
     # Build settings
     settings = Settings(
-        intent_model=intent_model,
-        eval_model=eval_model,
+        reasoning_model=reasoning_model,
+        instinct_model=instinct_model,
         llm_base_url=llm_base_url,
         cache_path=cache_path,
         cache_enabled=not no_cache,
@@ -462,7 +462,7 @@ def cite(
     ] = 3,
     sources: Annotated[
         str,
-        typer.Option("--sources", "-s", help="Comma-separated list of sources: pubmed,openalex,scholar,arxiv"),
+        typer.Option("--sources", "-s", help="Comma-separated list of sources: pubmed,openalex,scholar,arxiv,zotero"),
     ] = "pubmed,openalex,scholar",
     max_per_source: Annotated[
         int,
@@ -472,13 +472,13 @@ def cite(
         int,
         typer.Option("--prefilter-k", help="Number of candidates to send to LLM for reranking"),
     ] = 30,
-    intent_model: Annotated[
+    reasoning_model: Annotated[
         Optional[str],
-        typer.Option("--intent-model", help="Model for query rewriting/intent extraction"),
+        typer.Option("--reasoning-model", help="Model for reasoning tasks (query rewriting, segmentation)"),
     ] = None,
-    eval_model: Annotated[
+    instinct_model: Annotated[
         Optional[str],
-        typer.Option("--eval-model", help="Model for evaluation/reranking"),
+        typer.Option("--instinct-model", help="Model for instinct tasks (evaluation, reranking)"),
     ] = None,
     llm_base_url: Annotated[
         Optional[str],
@@ -522,7 +522,7 @@ def cite(
 
     # Parse sources
     source_list = [s.strip().lower() for s in sources.split(",") if s.strip()]
-    valid_sources = {"pubmed", "openalex", "scholar", "arxiv"}
+    valid_sources = {"pubmed", "openalex", "scholar", "arxiv", "zotero"}
     for src in source_list:
         if src not in valid_sources:
             console.print(f"[red]Error:[/red] Unknown source '{src}'. Valid: {', '.join(valid_sources)}")
@@ -544,8 +544,8 @@ def cite(
 
     # Build settings (needed for LLM client)
     settings = Settings(
-        intent_model=intent_model,
-        eval_model=eval_model,
+        reasoning_model=reasoning_model,
+        instinct_model=instinct_model,
         llm_base_url=llm_base_url,
         cache_path=cache_path,
         cache_enabled=not no_cache,
@@ -570,7 +570,7 @@ def cite(
         ) as progress:
             task = progress.add_task("[cyan]Segmenting text with LLM...", total=None)
             segments = asyncio.run(
-                split_segments_llm(text, llm, model=intent_model)
+                split_segments_llm(text, llm, model=reasoning_model)
             )
             needs_cite_count = sum(1 for seg in segments if seg.needs_citation)
             progress.update(
@@ -688,15 +688,15 @@ def cite(
 def check(
     sources: Annotated[
         str,
-        typer.Option("--sources", "-s", help="Comma-separated list of sources to check: pubmed,openalex,scholar,arxiv"),
+        typer.Option("--sources", "-s", help="Comma-separated list of sources to check: pubmed,openalex,scholar,arxiv,zotero"),
     ] = "pubmed,openalex,arxiv",
-    intent_model: Annotated[
+    reasoning_model: Annotated[
         Optional[str],
-        typer.Option("--intent-model", help="Model for query rewriting/intent extraction"),
+        typer.Option("--reasoning-model", help="Model for reasoning tasks (query rewriting, intent extraction)"),
     ] = None,
-    eval_model: Annotated[
+    instinct_model: Annotated[
         Optional[str],
-        typer.Option("--eval-model", help="Model for evaluation/reranking"),
+        typer.Option("--instinct-model", help="Model for instinct tasks (evaluation, reranking)"),
     ] = None,
     llm_base_url: Annotated[
         Optional[str],
@@ -714,8 +714,8 @@ def check(
     from papercli.config import Settings
 
     settings = Settings(
-        intent_model=intent_model,
-        eval_model=eval_model,
+        reasoning_model=reasoning_model,
+        instinct_model=instinct_model,
         llm_base_url=llm_base_url,
     )
 
@@ -735,9 +735,9 @@ async def _run_checks(settings: "Settings", sources: list[str]) -> None:
 
     # Display configuration
     console.print("[dim]Configuration:[/dim]")
-    console.print(f"  Intent Model: [cyan]{settings.get_intent_model()}[/cyan]")
-    console.print(f"  Eval Model:   [cyan]{settings.get_eval_model()}[/cyan]")
-    console.print(f"  LLM Base URL: [cyan]{settings.llm.base_url}[/cyan]")
+    console.print(f"  Reasoning Model: [cyan]{settings.get_reasoning_model()}[/cyan]")
+    console.print(f"  Instinct Model:  [cyan]{settings.get_instinct_model()}[/cyan]")
+    console.print(f"  LLM Base URL:    [cyan]{settings.llm.base_url}[/cyan]")
     console.print()
 
     results = []
@@ -745,7 +745,7 @@ async def _run_checks(settings: "Settings", sources: list[str]) -> None:
     # Check LLM API
     console.print("[bold]Checking LLM API...[/bold]")
     llm_ok, llm_msg, llm_time = await _check_llm(settings)
-    results.append(("LLM (Intent)", settings.get_intent_model(), llm_ok, llm_msg, llm_time))
+    results.append(("LLM (Reasoning)", settings.get_reasoning_model(), llm_ok, llm_msg, llm_time))
 
     # Check search sources
     console.print("[bold]Checking Search APIs...[/bold]")
@@ -765,6 +765,10 @@ async def _run_checks(settings: "Settings", sources: list[str]) -> None:
     if "scholar" in sources:
         ok, msg, t = await _check_scholar(settings)
         results.append(("Google Scholar", "SerpAPI", ok, msg, t))
+
+    if "zotero" in sources:
+        ok, msg, t = await _check_zotero(settings)
+        results.append(("Zotero", "api.zotero.org", ok, msg, t))
 
     # Display results table
     console.print()
@@ -802,7 +806,7 @@ async def _check_llm(settings: "Settings") -> tuple[bool, str, float | None]:
         start = time.time()
         response = await llm.complete(
             prompt="Say 'OK' if you can read this.",
-            model=settings.get_intent_model(),
+            model=settings.get_reasoning_model(),
             max_tokens=16,
         )
         elapsed = (time.time() - start) * 1000
@@ -814,7 +818,7 @@ async def _check_llm(settings: "Settings") -> tuple[bool, str, float | None]:
         raw = str(e) if str(e) else repr(e)
         one_line = re.sub(r"\s+", " ", raw).strip()
 
-        model = settings.get_intent_model()
+        model = settings.get_reasoning_model()
         base_url = settings.llm.base_url
         hint = ""
         # Common failure mode: OpenAI-compatible proxies that don't support newer models/endpoints.
@@ -922,6 +926,44 @@ async def _check_scholar(settings: "Settings") -> tuple[bool, str, float | None]
         return False, error_msg, None
 
 
+async def _check_zotero(settings: "Settings") -> tuple[bool, str, float | None]:
+    """Check Zotero API connectivity."""
+    import os
+    api_key = settings.get_zotero_api_key() or os.environ.get("ZOTERO_API_KEY")
+    user_id = settings.get_zotero_user_id() or os.environ.get("ZOTERO_USER_ID")
+
+    if not api_key:
+        return False, "ZOTERO_API_KEY not configured", None
+    if not user_id:
+        return False, "ZOTERO_USER_ID not configured", None
+
+    import time
+    import httpx
+    try:
+        start = time.time()
+        headers = {
+            "Zotero-API-Key": api_key,
+            "Zotero-API-Version": "3",
+        }
+        base_url = settings.zotero.base_url or "https://api.zotero.org"
+        async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
+            url = f"{base_url}/users/{user_id}/items?limit=1"
+            response = await client.get(url)
+            response.raise_for_status()
+        elapsed = (time.time() - start) * 1000
+        return True, "Connected", elapsed
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 403:
+            return False, "Invalid API key or no access", None
+        elif e.response.status_code == 404:
+            return False, "User ID not found", None
+        error_msg = str(e)[:50] if str(e) else "Connection failed"
+        return False, error_msg, None
+    except Exception as e:
+        error_msg = str(e)[:50] if str(e) else "Connection failed"
+        return False, error_msg, None
+
+
 @app.command("gen-query")
 def gen_query(
     query: Annotated[str, typer.Argument(help="Your search query (natural language)")],
@@ -933,9 +975,9 @@ def gen_query(
         str,
         typer.Option("--format", "-f", help="Output format: table, json, or md"),
     ] = "table",
-    intent_model: Annotated[
+    reasoning_model: Annotated[
         Optional[str],
-        typer.Option("--intent-model", help="Model for query rewriting/intent extraction"),
+        typer.Option("--reasoning-model", help="Model for reasoning tasks (query rewriting, intent extraction)"),
     ] = None,
     llm_base_url: Annotated[
         Optional[str],
@@ -992,7 +1034,7 @@ def gen_query(
 
     # Build settings
     settings = Settings(
-        intent_model=intent_model,
+        reasoning_model=reasoning_model,
         llm_base_url=llm_base_url,
         cache_path=cache_path,
         cache_enabled=not no_cache,
@@ -1063,7 +1105,7 @@ async def _run_gen_query(
         progress.update(task, description=f"[green]✓ Query generated for {platform_display}")
 
     if verbose and show_progress:
-        console.print(f"[dim]Intent model: {settings.get_intent_model()}[/dim]")
+        console.print(f"[dim]Reasoning model: {settings.get_reasoning_model()}[/dim]")
         console.print(f"[dim]LLM base URL: {settings.llm.base_url}[/dim]")
         console.print()
 
@@ -1934,6 +1976,345 @@ async def _run_slide(
         raise
     finally:
         await client.close()
+
+
+# ---------------------------------------------------------------------------
+# Review command group
+# ---------------------------------------------------------------------------
+
+review_app = typer.Typer(
+    name="review",
+    help="Review, critique, and lint academic papers.",
+    no_args_is_help=True,
+)
+app.add_typer(review_app, name="review")
+
+
+def _read_review_input(input_file: Optional[str], input_text: Optional[str]) -> str:
+    """Read review input text from --in, --text, or stdin."""
+    from pathlib import Path
+    import sys
+
+    if input_file and input_text:
+        raise ValueError("Use only one of --in or --text, not both.")
+
+    if input_text is not None:
+        return input_text
+
+    if input_file:
+        path = Path(input_file)
+        if not path.exists():
+            raise FileNotFoundError(f"Input file not found: {input_file}")
+        return path.read_text(encoding="utf-8")
+
+    if sys.stdin.isatty():
+        raise ValueError("No input provided. Use --in, --text, or pipe text to stdin.")
+
+    return sys.stdin.read()
+
+
+@review_app.command("critique")
+def review_critique(
+    input_file: Annotated[
+        Optional[str],
+        typer.Option("--in", "-i", help="Input text file (reads from stdin if not provided)"),
+    ] = None,
+    input_text: Annotated[
+        Optional[str],
+        typer.Option("--text", help="Input text to review"),
+    ] = None,
+    out: Annotated[
+        str,
+        typer.Option("--out", "-o", help="Output report path (default: review.md)"),
+    ] = "review.md",
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: md or json"),
+    ] = "md",
+    model: Annotated[
+        Optional[str],
+        typer.Option("--model", "-m", help="Model for review (defaults to instinct_model)"),
+    ] = None,
+    temperature: Annotated[
+        float,
+        typer.Option("--temperature", "-t", help="Sampling temperature (lower = more consistent)"),
+    ] = 0.3,
+    llm_base_url: Annotated[
+        Optional[str],
+        typer.Option("--llm-base-url", help="Base URL for OpenAI-compatible API"),
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
+) -> None:
+    """
+    Generate a structured peer review for a biology/biomedical paper.
+
+    Uses LLM to analyze the manuscript and produce a comprehensive review
+    covering strengths, weaknesses, experimental design, statistics,
+    reproducibility, and more.
+
+    Examples:
+        paper review critique --in manuscript.txt
+        paper review critique --in paper.md --format json --out review.json
+        cat abstract.txt | paper review critique --out feedback.md
+    """
+    import asyncio
+    import json
+    from pathlib import Path
+
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    from papercli.config import Settings
+    from papercli.llm import LLMClient, LLMError
+    from papercli.review.critique import run_critique, format_review_markdown
+
+    # Validate output format
+    if output_format not in ("md", "json"):
+        console.print("[red]Error:[/red] --format must be one of: md, json")
+        raise typer.Exit(1)
+
+    # Read input text
+    try:
+        text = _read_review_input(input_file, input_text)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to read input: {e}")
+        raise typer.Exit(1)
+
+    if not text.strip():
+        console.print("[red]Error:[/red] Input text is empty")
+        raise typer.Exit(1)
+
+    # Build settings
+    settings = Settings(
+        instinct_model=model,
+        llm_base_url=llm_base_url,
+    )
+
+    show_progress = not quiet
+
+    if verbose and show_progress:
+        console.print(f"[dim]Model: {model or settings.get_instinct_model()}[/dim]")
+        console.print(f"[dim]Input length: {len(text)} chars ({len(text.split())} words)[/dim]")
+        console.print()
+
+    # Run critique
+    llm = LLMClient(settings)
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            disable=not show_progress,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("[cyan]Analyzing manuscript...", total=None)
+
+            review = asyncio.run(
+                run_critique(
+                    text=text,
+                    llm_client=llm,
+                    model=model or settings.get_instinct_model(),
+                    temperature=temperature,
+                )
+            )
+
+            progress.update(task, description="[green]✓ Review complete")
+
+        # Format output
+        if output_format == "json":
+            output_text = json.dumps(review.model_dump(), ensure_ascii=False, indent=2)
+        else:
+            output_text = format_review_markdown(review)
+
+        # Write output
+        out_path = Path(out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            output_text + ("\n" if not output_text.endswith("\n") else ""),
+            encoding="utf-8",
+        )
+
+        if show_progress:
+            console.print(f"[green]✓ Review saved to {out_path}[/green]")
+
+            # Show summary
+            console.print()
+            console.print(f"[dim]Strengths: {len(review.strengths)}[/dim]")
+            console.print(f"[dim]Weaknesses: {len(review.weaknesses)}[/dim]")
+            console.print(f"[dim]Major concerns: {len(review.major_concerns)}[/dim]")
+            console.print(f"[dim]Questions: {len(review.questions_for_authors)}[/dim]")
+            if review.overall_recommendation:
+                rec = review.overall_recommendation.replace("_", " ").title()
+                console.print(f"[dim]Recommendation: {rec}[/dim]")
+
+    except LLMError as e:
+        if show_progress:
+            console.print("[bold red]❌ Review failed[/bold red]\n")
+            console.print(f"[yellow]{e.args[0]}[/yellow]\n")
+            if e.model or e.base_url:
+                console.print("[dim]Configuration:[/dim]")
+                if e.model:
+                    console.print(f"  • Model: [cyan]{e.model}[/cyan]")
+                if e.base_url:
+                    console.print(f"  • Base URL: [cyan]{e.base_url}[/cyan]")
+            if not verbose:
+                console.print("[dim]Run with --verbose for more details.[/dim]")
+        raise typer.Exit(1)
+    except Exception as e:
+        if verbose:
+            console.print_exception()
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    finally:
+        asyncio.run(llm.close())
+
+
+@review_app.command("lint")
+def review_lint(
+    input_file: Annotated[
+        Optional[str],
+        typer.Option("--in", "-i", help="Input text file (reads from stdin if not provided)"),
+    ] = None,
+    input_text: Annotated[
+        Optional[str],
+        typer.Option("--text", help="Input text to lint"),
+    ] = None,
+    out: Annotated[
+        Optional[str],
+        typer.Option("--out", "-o", help="Output report path (default: stdout)"),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: md or json"),
+    ] = "md",
+    rules: Annotated[
+        Optional[str],
+        typer.Option("--rules", "-r", help="Comma-separated list of rules to run (default: all)"),
+    ] = None,
+    exclude: Annotated[
+        Optional[str],
+        typer.Option("--exclude", "-x", help="Comma-separated list of rules to exclude"),
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
+) -> None:
+    """
+    Run deterministic lint checks on paper text.
+
+    Checks for:
+    - figure-table-ref: Inconsistent Fig./Figure and Tab./Table references
+    - units-format: Number-unit spacing and percentage formatting
+    - term-consistency: Inconsistent biology term usage (RNA-seq, CRISPR-Cas9, etc.)
+    - punctuation-mixed: Chinese/English punctuation mixing
+    - case-title: Inconsistent heading case style
+
+    Examples:
+        paper review lint --in manuscript.md
+        paper review lint --in paper.txt --format json
+        paper review lint --in draft.md --rules figure-table-ref,units-format
+        cat text.txt | paper review lint --exclude punctuation-mixed
+    """
+    import json
+    import sys
+    from pathlib import Path
+
+    from papercli.review.lint import run_lint, format_lint_markdown, RULES
+
+    # Validate output format
+    if output_format not in ("md", "json"):
+        console.print("[red]Error:[/red] --format must be one of: md, json")
+        raise typer.Exit(1)
+
+    # Parse rules
+    rule_list = None
+    if rules:
+        rule_list = [r.strip() for r in rules.split(",") if r.strip()]
+        # Validate rules
+        invalid = [r for r in rule_list if r not in RULES]
+        if invalid:
+            console.print(f"[red]Error:[/red] Unknown rules: {', '.join(invalid)}")
+            console.print(f"[dim]Available rules: {', '.join(RULES.keys())}[/dim]")
+            raise typer.Exit(1)
+
+    exclude_list = None
+    if exclude:
+        exclude_list = [r.strip() for r in exclude.split(",") if r.strip()]
+
+    # Read input text
+    try:
+        text = _read_review_input(input_file, input_text)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to read input: {e}")
+        raise typer.Exit(1)
+
+    if not text.strip():
+        console.print("[red]Error:[/red] Input text is empty")
+        raise typer.Exit(1)
+
+    show_progress = not quiet
+
+    if verbose and show_progress:
+        console.print(f"[dim]Input length: {len(text)} chars ({len(text.splitlines())} lines)[/dim]")
+        if rule_list:
+            console.print(f"[dim]Rules: {', '.join(rule_list)}[/dim]")
+        else:
+            console.print(f"[dim]Rules: all ({', '.join(RULES.keys())})[/dim]")
+        if exclude_list:
+            console.print(f"[dim]Excluded: {', '.join(exclude_list)}[/dim]")
+        console.print()
+
+    # Run lint
+    report = run_lint(text, rules=rule_list, exclude_rules=exclude_list)
+
+    # Format output
+    if output_format == "json":
+        output_text = json.dumps(report.model_dump(), ensure_ascii=False, indent=2)
+    else:
+        output_text = format_lint_markdown(report)
+
+    # Write output
+    if out:
+        out_path = Path(out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            output_text + ("\n" if not output_text.endswith("\n") else ""),
+            encoding="utf-8",
+        )
+        if show_progress:
+            console.print(f"[green]✓ Lint report saved to {out_path}[/green]")
+    else:
+        sys.stdout.write(output_text)
+        if not output_text.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    # Summary
+    if show_progress and out:
+        if report.issues:
+            console.print()
+            console.print(f"[dim]Found {len(report.issues)} issues:[/dim]")
+            console.print(f"[dim]  Errors: {report.error_count}[/dim]")
+            console.print(f"[dim]  Warnings: {report.warn_count}[/dim]")
+            console.print(f"[dim]  Info: {report.info_count}[/dim]")
+        else:
+            console.print("[dim]No issues found![/dim]")
+
+    # Exit with error code if there are errors
+    if report.error_count > 0:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

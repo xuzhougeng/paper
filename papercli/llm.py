@@ -96,7 +96,7 @@ class LLMClient:
 
         Args:
             prompt: User prompt
-            model: Model to use (defaults to intent_model)
+            model: Model to use (defaults to reasoning_model)
             system_prompt: Optional system prompt
             temperature: Sampling temperature
             max_tokens: Maximum tokens in response
@@ -104,7 +104,7 @@ class LLMClient:
         Returns:
             The completion text
         """
-        model = model or self.settings.get_intent_model()
+        model = model or self.settings.get_reasoning_model()
 
         response_text = await self._call_api_text(
             model=model,
@@ -145,7 +145,7 @@ class LLMClient:
             LLMError: If the LLM response cannot be parsed as valid JSON or
                       doesn't match the schema, with diagnostic context.
         """
-        model = model or self.settings.get_intent_model()
+        model = model or self.settings.get_reasoning_model()
         base_url = self.settings.llm.base_url
 
         # Build a compact "shape" instruction rather than embedding full JSON Schema.
@@ -535,31 +535,31 @@ class LLMClient:
 
         raise json.JSONDecodeError("No valid JSON found", text, 0)
 
-    async def intent_completion(
+    async def reasoning_completion(
         self,
         prompt: str,
         response_model: type[T],
         system_prompt: str | None = None,
     ) -> T:
-        """Get a structured completion using the intent model."""
+        """Get a structured completion using the reasoning model (for intent extraction, query rewriting, segmentation)."""
         return await self.complete_json(
             prompt=prompt,
             response_model=response_model,
-            model=self.settings.get_intent_model(),
+            model=self.settings.get_reasoning_model(),
             system_prompt=system_prompt,
         )
 
-    async def eval_completion(
+    async def instinct_completion(
         self,
         prompt: str,
         response_model: type[T],
         system_prompt: str | None = None,
     ) -> T:
-        """Get a structured completion using the eval model."""
+        """Get a structured completion using the instinct model (for evaluation, reranking, review critique)."""
         return await self.complete_json(
             prompt=prompt,
             response_model=response_model,
-            model=self.settings.get_eval_model(),
+            model=self.settings.get_instinct_model(),
             system_prompt=system_prompt,
         )
 

@@ -122,7 +122,7 @@ async def _evaluate_paper(
     prompt = _build_eval_prompt(query, paper)
 
     try:
-        evaluation = await llm.eval_completion(
+        evaluation = await llm.instinct_completion(
             prompt=prompt,
             response_model=PaperEvaluation,
             system_prompt=EVAL_SYSTEM_PROMPT,

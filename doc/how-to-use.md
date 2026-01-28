@@ -16,8 +16,8 @@ export LLM_BASE_URL="https://api.openai-proxy.org/v1"  # for OpenAI
 export LLM_API_KEY="sk-..."
 
 # Optional: Model configuration (defaults shown)
-export PAPERCLI_INTENT_MODEL="gpt-5.2"  # For query rewriting
-export PAPERCLI_EVAL_MODEL="gpt-4o"          # For paper evaluation
+export PAPERCLI_REASONING_MODEL="gpt-5.2"  # For reasoning tasks (query rewriting, segmentation)
+export PAPERCLI_INSTINCT_MODEL="gpt-4o"    # For instinct tasks (evaluation, reranking, review)
 
 # Optional: Required for Google Scholar search
 export SERPAPI_API_KEY="your-serpapi-key"
@@ -63,7 +63,7 @@ Found 5 relevant papers (5 highly relevant) from 107 candidates
 ...
 ```
 
-cite 命令使用 LLM 进行智能分句，不是简单地按标点符号拆分，而是根据语句之间的语义关系（如因果、对比、延续等）推断出更合适的拆分方式。分句使用的是 `intent_model`（意图理解模型），你可以通过环境变量或命令行参数覆盖。
+cite 命令使用 LLM 进行智能分句，不是简单地按标点符号拆分，而是根据语句之间的语义关系（如因果、对比、延续等）推断出更合适的拆分方式。分句使用的是 `reasoning_model`（推理模型），你可以通过环境变量或命令行参数覆盖。
 
 ```bash
 paper cite --text "作物单细胞制备困难。不同组织的酶解条件差异很大！"
@@ -84,7 +84,7 @@ cat notes.txt | paper cite --top-k 2
 指定其他模型进行分句：
 
 ```bash
-paper cite --text "..." --intent-model gpt-4o
+paper cite --text "..." --reasoning-model gpt-4o
 ```
 
 

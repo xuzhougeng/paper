@@ -5,6 +5,7 @@ from papercli.sources.base import BaseSource
 from papercli.sources.openalex import OpenAlexSource
 from papercli.sources.pubmed import PubMedSource
 from papercli.sources.scholar import ScholarSource
+from papercli.sources.zotero import ZoteroSource
 
 __all__ = [
     "BaseSource",
@@ -12,4 +13,5 @@ __all__ = [
     "OpenAlexSource",
     "ScholarSource",
     "ArxivSource",
+    "ZoteroSource",
 ]

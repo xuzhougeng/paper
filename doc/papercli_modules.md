@@ -110,7 +110,7 @@ papercli/
    - `segments`: 分句列表（必须非空）
 
 3. **`split_sentences_llm(text, llm_client, model)`** - LLM 分句函数
-   - 使用 `intent_model`（默认 `gpt-4o-mini`）进行语义分句
+   - 使用 `reasoning_model`（默认 `gpt-4o-mini`）进行语义分句
    - 返回分句文本列表 `list[str]`
    - 失败时抛出 `LLMError`（fail-fast）
 
@@ -132,8 +132,8 @@ papercli/
 1. **`LLMConfig`** - LLM 配置
    - `base_url`: API 基础 URL (默认 OpenAI)
    - `api_key`: API 密钥
-   - `intent_model`: 意图提取模型 (默认 gpt-4o-mini)
-   - `eval_model`: 论文评估模型 (默认 gpt-4o)
+   - `reasoning_model`: 推理模型，用于查询改写/意图提取/分句 (默认 gpt-4o-mini)
+   - `instinct_model`: 直觉模型，用于论文评估/重排/评审 (默认 gpt-4o)
    - `timeout`: 请求超时时间
    - `max_retries`: 最大重试次数
 
@@ -931,8 +931,8 @@ paper slide --in article.txt --style dark --show-highlights
 [llm]
 base_url = "https://api.openai.com/v1"
 api_key = "sk-..."
-intent_model = "gpt-4o-mini"
-eval_model = "gpt-4o"
+reasoning_model = "gpt-4o-mini"
+instinct_model = "gpt-4o"
 
 [doc2x]
 base_url = "https://v2.doc2x.noedgeai.com"

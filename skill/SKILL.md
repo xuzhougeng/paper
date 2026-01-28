@@ -33,8 +33,8 @@ Use env vars or a config file. Env vars override config.
 export LLM_API_KEY="sk-..."
 
 # Optional model overrides
-export PAPERCLI_INTENT_MODEL="gpt-4o-mini"
-export PAPERCLI_EVAL_MODEL="gpt-4o"
+export PAPERCLI_REASONING_MODEL="gpt-4o-mini"
+export PAPERCLI_INSTINCT_MODEL="gpt-4o"
 
 # Optional per-feature keys
 export SERPAPI_API_KEY="your-serpapi-key"
@@ -49,8 +49,8 @@ export GEMINI_API_KEY="your-gemini-key"
 [llm]
 api_key = "sk-..."
 base_url = "https://api.openai.com/v1"
-intent_model = "gpt-4o-mini"
-eval_model = "gpt-4o"
+reasoning_model = "gpt-4o-mini"
+instinct_model = "gpt-4o"
 
 [doc2x]
 api_key = "sk-..."
