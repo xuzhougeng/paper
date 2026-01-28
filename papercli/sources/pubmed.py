@@ -33,16 +33,17 @@ class PubMedSource(BaseSource):
         # Build search query - use English query for PubMed
         query = self._build_query(intent)
 
-        # Check cache
-        cache_key = f"pubmed:{query}:{max_results}"
+        # Build cache key including filter parameters
+        year_filter = self._get_year_filter_key(intent)
+        cache_key = f"pubmed:{query}:{max_results}:{year_filter}"
         if self.cache:
             cached = await self.cache.get(cache_key)
             if cached:
                 return [Paper.model_validate(p) for p in cached]
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Step 1: Search to get PMIDs
-            pmids = await self._esearch(client, query, max_results)
+            # Step 1: Search to get PMIDs (with date filters)
+            pmids = await self._esearch(client, query, max_results, intent)
             if not pmids:
                 return []
 
@@ -54,6 +55,19 @@ class PubMedSource(BaseSource):
             await self.cache.set(cache_key, [p.model_dump() for p in papers])
 
         return papers
+
+    def _get_year_filter_key(self, intent: QueryIntent) -> str:
+        """Generate cache key component for year filters."""
+        parts = []
+        if intent.year:
+            parts.append(f"y{intent.year}")
+        if intent.year_min:
+            parts.append(f"ymin{intent.year_min}")
+        if intent.year_max:
+            parts.append(f"ymax{intent.year_max}")
+        if intent.venue:
+            parts.append(f"v{intent.venue}")
+        return "_".join(parts) if parts else "nofilter"
 
     def _build_query(self, intent: QueryIntent) -> str:
         """Build PubMed search query from intent."""
@@ -67,6 +81,10 @@ class PubMedSource(BaseSource):
         for phrase in intent.required_phrases:
             parts.append(f'"{phrase}"[Title/Abstract]')
 
+        # Add venue/journal filter if specified
+        if intent.venue:
+            parts.append(f'"{intent.venue}"[Journal]')
+
         # Combine with AND
         query = " AND ".join(parts)
 
@@ -77,10 +95,14 @@ class PubMedSource(BaseSource):
         return query
 
     async def _esearch(
-        self, client: httpx.AsyncClient, query: str, max_results: int
+        self,
+        client: httpx.AsyncClient,
+        query: str,
+        max_results: int,
+        intent: QueryIntent,
     ) -> list[str]:
-        """Use esearch to get PMIDs."""
-        params = {
+        """Use esearch to get PMIDs with optional date filtering."""
+        params: dict[str, str | int] = {
             "db": "pubmed",
             "term": query,
             "retmax": max_results,
@@ -89,6 +111,22 @@ class PubMedSource(BaseSource):
         }
         if self.api_key:
             params["api_key"] = self.api_key
+
+        # Add date filters using E-utilities date parameters
+        # These are more reliable than embedding in the query term
+        if intent.year or intent.year_min or intent.year_max:
+            params["datetype"] = "PDAT"  # Publication date
+
+            if intent.year:
+                # Exact year: set both min and max to same year
+                params["mindate"] = str(intent.year)
+                params["maxdate"] = str(intent.year)
+            else:
+                # Year range
+                if intent.year_min:
+                    params["mindate"] = str(intent.year_min)
+                if intent.year_max:
+                    params["maxdate"] = str(intent.year_max)
 
         url = f"{EUTILS_BASE}/esearch.fcgi"
         response = await client.get(url, params=params)

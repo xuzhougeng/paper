@@ -57,6 +57,11 @@ class QueryIntent(BaseModel):
     exclude_terms: list[str] = Field(
         default_factory=list, description="Terms to exclude from results"
     )
+    # Filter fields for year and venue
+    year: Optional[int] = Field(None, description="Exact publication year filter (e.g., 2025)")
+    year_min: Optional[int] = Field(None, description="Minimum publication year (inclusive)")
+    year_max: Optional[int] = Field(None, description="Maximum publication year (inclusive)")
+    venue: Optional[str] = Field(None, description="Journal or conference name filter (e.g., 'Bioinformatics', 'Nature')")
 
 
 class PlatformQueryResult(BaseModel):

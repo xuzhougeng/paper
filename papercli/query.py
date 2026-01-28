@@ -84,9 +84,14 @@ INTENT_SYSTEM_PROMPT = """You are a search query expert specializing in academic
 3. Generate an optimized English search query for academic databases
 4. Identify key terms, synonyms, abbreviations, and related concepts
 5. Determine if any specific phrases must appear or terms should be excluded
+6. Extract any publication year or journal/venue constraints mentioned in the query
 
 Focus on scientific/academic terminology. Always expand abbreviations and provide common synonyms.
-If the query is in Chinese or another language, translate it to English for search while preserving the original meaning."""
+If the query is in Chinese or another language, translate it to English for search while preserving the original meaning.
+
+Pay special attention to:
+- Year mentions like "2025", "recent", "last 3 years", "published in 2024-2025"
+- Journal/venue mentions like "in Nature", "published in Bioinformatics", "from Cell", "in PNAS\""""
 
 
 async def extract_intent(
@@ -124,8 +129,10 @@ Please provide:
    - What are the key concepts?
    - Are there any abbreviations to expand?
    - What related terms might help find relevant papers?
+   - Are there any year or journal/venue constraints?
 
-2. **query_en**: An optimized English search query for academic databases (concise but comprehensive)
+2. **query_en**: An optimized English search query for academic databases (concise but comprehensive).
+   NOTE: Do NOT include year or journal filters in this query string - those go in separate fields below.
 
 3. **keywords**: Key terms that should be searched. IMPORTANT RULES:
    - ALL keywords MUST be in English (translate if the query is in another language)
@@ -140,6 +147,16 @@ Please provide:
 5. **required_phrases**: Any exact phrases that must appear in results (usually empty unless user specified)
 
 6. **exclude_terms**: Any terms to exclude from results (usually empty unless user wants to filter something out)
+
+7. **year**: If user specifies an exact publication year (e.g., "papers from 2025", "2024 publications"), provide the year as an integer. Otherwise null.
+
+8. **year_min** and **year_max**: If user specifies a year range (e.g., "last 3 years", "2020-2024", "since 2022"), provide the range bounds. Otherwise null.
+   - For "recent" or "last N years", calculate from current year (2026).
+   - If only minimum is specified (e.g., "since 2020"), set year_min only.
+
+9. **venue**: If user specifies a journal or conference name (e.g., "in Nature", "published in Bioinformatics", "from Cell"), extract the venue name. Otherwise null.
+   - Use the standard journal name (e.g., "Bioinformatics" not "bioinformatics journal")
+   - Common examples: "Nature", "Science", "Cell", "PNAS", "Bioinformatics", "Nucleic Acids Research"
 
 If the original query is in Chinese, also provide **query_zh** with the Chinese version."""
 

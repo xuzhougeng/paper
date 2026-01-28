@@ -345,6 +345,24 @@ def find(
         int,
         typer.Option("--prefilter-k", help="Number of candidates to send to LLM for reranking"),
     ] = 30,
+    # Filter options
+    year: Annotated[
+        Optional[int],
+        typer.Option("--year", "-y", help="Filter by exact publication year (e.g., 2025)"),
+    ] = None,
+    year_min: Annotated[
+        Optional[int],
+        typer.Option("--year-min", help="Filter by minimum publication year (inclusive)"),
+    ] = None,
+    year_max: Annotated[
+        Optional[int],
+        typer.Option("--year-max", help="Filter by maximum publication year (inclusive)"),
+    ] = None,
+    venue: Annotated[
+        Optional[str],
+        typer.Option("--venue", "-j", help="Filter by journal/venue name (e.g., 'Bioinformatics', 'Nature')"),
+    ] = None,
+    # Model options
     reasoning_model: Annotated[
         Optional[str],
         typer.Option("--reasoning-model", help="Model for reasoning tasks (query rewriting, intent extraction)"),
@@ -385,8 +403,10 @@ def find(
     """
     Find academic papers relevant to your query.
 
-    Example:
+    Examples:
         paper find "CRISPR gene editing for cancer therapy"
+        paper find "single cell RNA-seq" --year 2025 --venue Bioinformatics
+        paper find "machine learning" --year-min 2020 --year-max 2025
     """
     from papercli.config import Settings
     from papercli.pipeline import run_pipeline
@@ -413,6 +433,11 @@ def find(
         cache_enabled=not no_cache,
     )
 
+    # Validate year filter combinations
+    if year is not None and (year_min is not None or year_max is not None):
+        console.print("[red]Error:[/red] Cannot use --year with --year-min/--year-max. Use one or the other.")
+        raise typer.Exit(1)
+
     # Run the pipeline
     try:
         results = run_pipeline(
@@ -425,6 +450,11 @@ def find(
             verbose=verbose,
             quiet=quiet,
             show_all=show_all,
+            # Filter parameters
+            year=year,
+            year_min=year_min,
+            year_max=year_max,
+            venue=venue,
         )
 
         # Output results
@@ -440,6 +470,332 @@ def find(
         else:
             console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+
+
+@app.command()
+def topics(
+    query: Annotated[
+        Optional[str],
+        typer.Argument(help="Search query (optional if using --in)"),
+    ] = None,
+    input_file: Annotated[
+        Optional[str],
+        typer.Option("--in", "-i", help="Input JSON file with papers (from 'paper find --format json')"),
+    ] = None,
+    out: Annotated[
+        str,
+        typer.Option("--out", "-o", help="Output file path (default: topics.md)"),
+    ] = "topics.md",
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: md or json"),
+    ] = "md",
+    sources: Annotated[
+        str,
+        typer.Option("--sources", "-s", help="Comma-separated list of sources: pubmed,openalex,scholar,arxiv,zotero"),
+    ] = "pubmed,openalex,scholar",
+    max_per_source: Annotated[
+        int,
+        typer.Option("--max-per-source", help="Maximum papers to fetch per source"),
+    ] = 100,
+    # Filter options
+    year: Annotated[
+        Optional[int],
+        typer.Option("--year", "-y", help="Filter by exact publication year (e.g., 2025)"),
+    ] = None,
+    year_min: Annotated[
+        Optional[int],
+        typer.Option("--year-min", help="Filter by minimum publication year (inclusive)"),
+    ] = None,
+    year_max: Annotated[
+        Optional[int],
+        typer.Option("--year-max", help="Filter by maximum publication year (inclusive)"),
+    ] = None,
+    venue: Annotated[
+        Optional[str],
+        typer.Option("--venue", "-j", help="Filter by journal/venue name (e.g., 'Bioinformatics', 'Nature')"),
+    ] = None,
+    num_topics: Annotated[
+        int,
+        typer.Option("--num-topics", help="Target number of topics to identify (5-15)"),
+    ] = 10,
+    # Model options
+    reasoning_model: Annotated[
+        Optional[str],
+        typer.Option("--reasoning-model", help="Model for topic analysis"),
+    ] = None,
+    llm_base_url: Annotated[
+        Optional[str],
+        typer.Option("--llm-base-url", help="Base URL for OpenAI-compatible API"),
+    ] = None,
+    cache_path: Annotated[
+        Optional[str],
+        typer.Option("--cache-path", help="Path to SQLite cache file"),
+    ] = None,
+    no_cache: Annotated[
+        bool,
+        typer.Option("--no-cache", help="Disable caching"),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-V", help="Enable verbose output"),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
+) -> None:
+    """
+    Analyze publication topics from search results or a JSON file.
+
+    Two modes of operation:
+    1. Direct search: paper topics "query" --year 2025 --venue Bioinformatics
+    2. From file: paper topics --in papers.json
+
+    Examples:
+        paper topics "bioinformatics methods" --year 2025 --venue Bioinformatics
+        paper topics --in papers.json --format json --out analysis.json
+        paper find "RNA-seq" --show-all --format json > papers.json && paper topics --in papers.json
+    """
+    import asyncio
+    import json
+    from pathlib import Path
+
+    from papercli.config import Settings
+    from papercli.models import Paper, EvalResult
+
+    # Validate input mode
+    if not query and not input_file:
+        console.print("[red]Error:[/red] Either provide a search query or use --in with a JSON file.")
+        raise typer.Exit(1)
+
+    if query and input_file:
+        console.print("[red]Error:[/red] Cannot use both query and --in. Use one or the other.")
+        raise typer.Exit(1)
+
+    # Validate output format
+    if output_format not in ("md", "json"):
+        console.print("[red]Error:[/red] --format must be one of: md, json")
+        raise typer.Exit(1)
+
+    # Validate year filter combinations
+    if year is not None and (year_min is not None or year_max is not None):
+        console.print("[red]Error:[/red] Cannot use --year with --year-min/--year-max. Use one or the other.")
+        raise typer.Exit(1)
+
+    # Validate num_topics
+    if not 3 <= num_topics <= 20:
+        console.print("[red]Error:[/red] --num-topics must be between 3 and 20")
+        raise typer.Exit(1)
+
+    # Build settings
+    settings = Settings(
+        reasoning_model=reasoning_model,
+        llm_base_url=llm_base_url,
+        cache_path=cache_path,
+        cache_enabled=not no_cache,
+    )
+
+    show_progress = not quiet
+
+    try:
+        asyncio.run(
+            _run_topics(
+                query=query,
+                input_file=input_file,
+                out=out,
+                output_format=output_format,
+                sources=sources,
+                max_per_source=max_per_source,
+                year=year,
+                year_min=year_min,
+                year_max=year_max,
+                venue=venue,
+                num_topics=num_topics,
+                settings=settings,
+                verbose=verbose,
+                show_progress=show_progress,
+            )
+        )
+    except Exception as e:
+        if verbose:
+            console.print_exception()
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+async def _run_topics(
+    query: str | None,
+    input_file: str | None,
+    out: str,
+    output_format: str,
+    sources: str,
+    max_per_source: int,
+    year: int | None,
+    year_min: int | None,
+    year_max: int | None,
+    venue: str | None,
+    num_topics: int,
+    settings: "Settings",
+    verbose: bool,
+    show_progress: bool,
+) -> None:
+    """Run the topic analysis workflow."""
+    import json
+    from pathlib import Path
+
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    from papercli.cache import Cache
+    from papercli.llm import LLMClient
+    from papercli.models import Paper, EvalResult
+    from papercli.pipeline import run_pipeline_async, apply_filters
+    from papercli.topics import (
+        extract_keywords_stats,
+        analyze_topics_llm,
+        format_topics_markdown,
+        format_topics_json,
+    )
+
+    papers: list[Paper] = []
+
+    # Mode 1: Load from JSON file
+    if input_file:
+        if show_progress:
+            console.print(f"[cyan]Loading papers from {input_file}...[/cyan]")
+
+        path = Path(input_file)
+        if not path.exists():
+            raise FileNotFoundError(f"Input file not found: {input_file}")
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+        # Handle different JSON formats
+        if isinstance(data, list):
+            # List of papers or EvalResults
+            for item in data:
+                if "paper" in item:
+                    # EvalResult format
+                    papers.append(Paper.model_validate(item["paper"]))
+                else:
+                    # Direct Paper format
+                    papers.append(Paper.model_validate(item))
+        elif isinstance(data, dict) and "results" in data:
+            # Results wrapper format
+            for item in data["results"]:
+                if "paper" in item:
+                    papers.append(Paper.model_validate(item["paper"]))
+                else:
+                    papers.append(Paper.model_validate(item))
+
+        if show_progress:
+            console.print(f"[green]✓ Loaded {len(papers)} papers[/green]")
+
+        # Apply filters if specified
+        if year or year_min or year_max or venue:
+            from papercli.models import QueryIntent
+            filter_intent = QueryIntent(
+                reasoning="",
+                query_en="",
+                year=year,
+                year_min=year_min,
+                year_max=year_max,
+                venue=venue,
+            )
+            pre_filter = len(papers)
+            papers = apply_filters(papers, filter_intent)
+            if show_progress and pre_filter != len(papers):
+                console.print(f"[dim]Filtered: {pre_filter} → {len(papers)} papers[/dim]")
+
+    # Mode 2: Search and fetch papers
+    else:
+        if show_progress:
+            console.print(f"[cyan]Searching for papers: {query}[/cyan]")
+
+        # Parse sources
+        source_list = [s.strip().lower() for s in sources.split(",") if s.strip()]
+        valid_sources = {"pubmed", "openalex", "scholar", "arxiv", "zotero"}
+        for src in source_list:
+            if src not in valid_sources:
+                raise ValueError(f"Unknown source '{src}'. Valid: {', '.join(valid_sources)}")
+
+        # Run the pipeline with show_all to get all papers (no LLM reranking)
+        results = await run_pipeline_async(
+            query=query,
+            sources=source_list,
+            top_n=max_per_source * len(source_list),  # Get all
+            max_per_source=max_per_source,
+            prefilter_k=max_per_source * len(source_list),
+            settings=settings,
+            verbose=verbose,
+            quiet=not show_progress,
+            show_all=True,  # Skip LLM reranking
+            year=year,
+            year_min=year_min,
+            year_max=year_max,
+            venue=venue,
+        )
+
+        papers = [r.paper for r in results]
+
+    if not papers:
+        console.print("[yellow]No papers found to analyze.[/yellow]")
+        return
+
+    if show_progress:
+        console.print(f"\n[cyan]Analyzing {len(papers)} papers...[/cyan]\n")
+
+    # Initialize components
+    cache = Cache(settings.get_cache_path()) if settings.cache_enabled else None
+    llm = LLMClient(settings)
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            disable=not show_progress,
+            transient=True,
+        ) as progress:
+            # Step 1: Extract keyword statistics
+            task = progress.add_task("[cyan]Extracting keyword statistics...", total=None)
+            stats = extract_keywords_stats(papers)
+            progress.update(task, description="[green]✓ Keywords extracted")
+
+            # Step 2: LLM topic analysis
+            progress.update(task, description="[cyan]Analyzing topics with LLM...")
+            analysis = await analyze_topics_llm(papers, llm, cache, num_topics=num_topics)
+            progress.update(task, description="[green]✓ Topic analysis complete")
+
+        # Format output
+        if output_format == "md":
+            output_text = format_topics_markdown(stats, analysis, venue_filter=venue, year_filter=year)
+        else:
+            output_data = format_topics_json(stats, analysis, venue_filter=venue, year_filter=year)
+            output_text = json.dumps(output_data, ensure_ascii=False, indent=2)
+
+        # Write output
+        out_path = Path(out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            output_text + ("\n" if not output_text.endswith("\n") else ""),
+            encoding="utf-8",
+        )
+
+        if show_progress:
+            console.print(f"[green]✓ Topic analysis saved to {out_path}[/green]")
+
+            # Show summary
+            console.print()
+            console.print(f"[dim]Topics identified: {len(analysis.topics)}[/dim]")
+            for i, topic in enumerate(analysis.topics[:5], 1):
+                console.print(f"[dim]  {i}. {topic.name} ({topic.paper_count} papers)[/dim]")
+            if len(analysis.topics) > 5:
+                console.print(f"[dim]  ... and {len(analysis.topics) - 5} more[/dim]")
+
+    finally:
+        await llm.close()
 
 
 @app.command()

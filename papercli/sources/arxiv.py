@@ -36,8 +36,9 @@ class ArxivSource(BaseSource):
         """Search arXiv for papers matching the query intent."""
         query = self._build_query(intent)
 
-        # Check cache
-        cache_key = f"arxiv:{query}:{max_results}"
+        # Build cache key including year filters
+        filter_key = self._get_filter_key(intent)
+        cache_key = f"arxiv:{query}:{max_results}:{filter_key}"
         if self.cache:
             cached = await self.cache.get(cache_key)
             if cached:
@@ -63,6 +64,18 @@ class ArxivSource(BaseSource):
 
         return papers
 
+    def _get_filter_key(self, intent: QueryIntent) -> str:
+        """Generate cache key component for filters."""
+        parts = []
+        if intent.year:
+            parts.append(f"y{intent.year}")
+        if intent.year_min:
+            parts.append(f"ymin{intent.year_min}")
+        if intent.year_max:
+            parts.append(f"ymax{intent.year_max}")
+        # Note: venue filtering not applicable to arXiv
+        return "_".join(parts) if parts else "nofilter"
+
     def _build_query(self, intent: QueryIntent) -> str:
         """Build arXiv API query from intent."""
         # arXiv uses: all, ti (title), abs (abstract), au (author), etc.
@@ -73,10 +86,29 @@ class ArxivSource(BaseSource):
         terms = query.split()
         if len(terms) <= 3:
             # Short query - search everywhere
-            return f"all:{quote(query)}"
+            base_query = f"all:{quote(query)}"
         else:
             # Longer query - search in title and abstract
-            return f"ti:{quote(query)} OR abs:{quote(query)}"
+            base_query = f"ti:{quote(query)} OR abs:{quote(query)}"
+
+        # Add date filter if specified
+        # arXiv uses submittedDate:[YYYYMMDD* TO YYYYMMDD*] format
+        date_filter = self._build_date_filter(intent)
+        if date_filter:
+            return f"({base_query}) AND {date_filter}"
+
+        return base_query
+
+    def _build_date_filter(self, intent: QueryIntent) -> str | None:
+        """Build arXiv date filter from intent."""
+        if intent.year:
+            # Exact year: January 1 to December 31
+            return f"submittedDate:[{intent.year}0101 TO {intent.year}1231]"
+        elif intent.year_min or intent.year_max:
+            start = f"{intent.year_min}0101" if intent.year_min else "*"
+            end = f"{intent.year_max}1231" if intent.year_max else "*"
+            return f"submittedDate:[{start} TO {end}]"
+        return None
 
     def _parse_atom(self, xml_text: str) -> list[Paper]:
         """Parse arXiv Atom feed response."""

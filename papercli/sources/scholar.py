@@ -44,20 +44,31 @@ class ScholarSource(BaseSource):
 
         query = intent.query_en
 
-        # Check cache
-        cache_key = f"scholar:{query}:{max_results}"
+        # Build cache key including year filters
+        filter_key = self._get_filter_key(intent)
+        cache_key = f"scholar:{query}:{max_results}:{filter_key}"
         if self.cache:
             cached = await self.cache.get(cache_key)
             if cached:
                 return [Paper.model_validate(p) for p in cached]
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            params = {
+            params: dict[str, str | int] = {
                 "engine": "google_scholar",
                 "q": query,
                 "api_key": api_key,
                 "num": min(max_results, 20),  # SerpAPI max per page
             }
+
+            # Add year range filters using SerpAPI's as_ylo/as_yhi
+            if intent.year:
+                params["as_ylo"] = intent.year
+                params["as_yhi"] = intent.year
+            else:
+                if intent.year_min:
+                    params["as_ylo"] = intent.year_min
+                if intent.year_max:
+                    params["as_yhi"] = intent.year_max
 
             response = await client.get(SERPAPI_URL, params=params)
             response.raise_for_status()
@@ -70,6 +81,18 @@ class ScholarSource(BaseSource):
             await self.cache.set(cache_key, [p.model_dump() for p in papers])
 
         return papers
+
+    def _get_filter_key(self, intent: QueryIntent) -> str:
+        """Generate cache key component for filters."""
+        parts = []
+        if intent.year:
+            parts.append(f"y{intent.year}")
+        if intent.year_min:
+            parts.append(f"ymin{intent.year_min}")
+        if intent.year_max:
+            parts.append(f"ymax{intent.year_max}")
+        # Note: venue filtering not supported natively by Scholar
+        return "_".join(parts) if parts else "nofilter"
 
     def _parse_results(self, results: list[dict[str, Any]]) -> list[Paper]:
         """Parse SerpAPI Scholar results into Paper objects."""

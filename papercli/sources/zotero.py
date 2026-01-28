@@ -103,8 +103,9 @@ class ZoteroSource(BaseSource):
 
         query = self._build_query(intent)
 
-        # Check cache
-        cache_key = f"zotero:{user_id}:{query}:{max_results}"
+        # Build cache key including filter info (filtering is done post-query)
+        filter_key = self._get_filter_key(intent)
+        cache_key = f"zotero:{user_id}:{query}:{max_results}:{filter_key}"
         if self.cache:
             cached = await self.cache.get(cache_key)
             if cached:
@@ -136,6 +137,20 @@ class ZoteroSource(BaseSource):
             await self.cache.set(cache_key, [p.model_dump() for p in papers])
 
         return papers
+
+    def _get_filter_key(self, intent: QueryIntent) -> str:
+        """Generate cache key component for filters."""
+        parts = []
+        if intent.year:
+            parts.append(f"y{intent.year}")
+        if intent.year_min:
+            parts.append(f"ymin{intent.year_min}")
+        if intent.year_max:
+            parts.append(f"ymax{intent.year_max}")
+        if intent.venue:
+            parts.append(f"v{intent.venue}")
+        # Note: Zotero doesn't support native filtering; post-filtering is applied in pipeline
+        return "_".join(parts) if parts else "nofilter"
 
     def _build_query(self, intent: QueryIntent) -> str:
         """Build Zotero search query from intent."""

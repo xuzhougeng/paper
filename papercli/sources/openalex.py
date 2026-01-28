@@ -30,8 +30,9 @@ class OpenAlexSource(BaseSource):
         """Search OpenAlex for papers matching the query intent."""
         query = intent.query_en
 
-        # Check cache
-        cache_key = f"openalex:{query}:{max_results}"
+        # Build filter components for year and venue
+        filter_key = self._get_filter_key(intent)
+        cache_key = f"openalex:{query}:{max_results}:{filter_key}"
         if self.cache:
             cached = await self.cache.get(cache_key)
             if cached:
@@ -42,11 +43,16 @@ class OpenAlexSource(BaseSource):
             headers["User-Agent"] = f"papercli/0.1.0 (mailto:{self.email})"
 
         async with httpx.AsyncClient(timeout=30.0, headers=headers) as client:
-            params = {
+            params: dict[str, str | int] = {
                 "search": query,
                 "per_page": max_results,
                 "select": "id,title,abstract_inverted_index,publication_year,authorships,primary_location,doi",
             }
+
+            # Build filter string for year and venue
+            filter_parts = self._build_filter(intent)
+            if filter_parts:
+                params["filter"] = ",".join(filter_parts)
 
             url = f"{OPENALEX_API}/works"
             response = await client.get(url, params=params)
@@ -60,6 +66,40 @@ class OpenAlexSource(BaseSource):
             await self.cache.set(cache_key, [p.model_dump() for p in papers])
 
         return papers
+
+    def _get_filter_key(self, intent: QueryIntent) -> str:
+        """Generate cache key component for filters."""
+        parts = []
+        if intent.year:
+            parts.append(f"y{intent.year}")
+        if intent.year_min:
+            parts.append(f"ymin{intent.year_min}")
+        if intent.year_max:
+            parts.append(f"ymax{intent.year_max}")
+        if intent.venue:
+            parts.append(f"v{intent.venue}")
+        return "_".join(parts) if parts else "nofilter"
+
+    def _build_filter(self, intent: QueryIntent) -> list[str]:
+        """Build OpenAlex filter components from intent."""
+        filters = []
+
+        # Year filters
+        if intent.year:
+            filters.append(f"publication_year:{intent.year}")
+        elif intent.year_min and intent.year_max:
+            filters.append(f"publication_year:{intent.year_min}-{intent.year_max}")
+        elif intent.year_min:
+            filters.append(f"publication_year:>{intent.year_min - 1}")
+        elif intent.year_max:
+            filters.append(f"publication_year:<{intent.year_max + 1}")
+
+        # Venue filter - use primary_location.source.display_name
+        if intent.venue:
+            # OpenAlex uses display_name for journal names
+            filters.append(f"primary_location.source.display_name.search:{intent.venue}")
+
+        return filters
 
     def _parse_results(self, results: list[dict[str, Any]]) -> list[Paper]:
         """Parse OpenAlex API results into Paper objects."""

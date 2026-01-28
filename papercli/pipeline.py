@@ -16,6 +16,98 @@ if TYPE_CHECKING:
 console = Console()
 
 
+def apply_filters(papers: list[Paper], intent: QueryIntent) -> list[Paper]:
+    """
+    Apply year and venue filters to papers (post-filtering).
+
+    This is a fallback for sources that don't support native filtering.
+    Papers that already passed native filters won't be affected.
+
+    Args:
+        papers: List of papers to filter
+        intent: QueryIntent with filter criteria
+
+    Returns:
+        Filtered list of papers
+    """
+    if not papers:
+        return papers
+
+    # Check if any filters are set
+    has_year_filter = intent.year or intent.year_min or intent.year_max
+    has_venue_filter = bool(intent.venue)
+
+    if not has_year_filter and not has_venue_filter:
+        return papers
+
+    filtered = []
+    for paper in papers:
+        # Year filter
+        if has_year_filter and paper.year:
+            if intent.year and paper.year != intent.year:
+                continue
+            if intent.year_min and paper.year < intent.year_min:
+                continue
+            if intent.year_max and paper.year > intent.year_max:
+                continue
+        elif has_year_filter and not paper.year:
+            # If year filter is set but paper has no year, skip it
+            continue
+
+        # Venue filter - case-insensitive partial match
+        if has_venue_filter:
+            if not paper.venue:
+                continue
+            # Normalize both for comparison
+            paper_venue_lower = paper.venue.lower()
+            filter_venue_lower = intent.venue.lower() if intent.venue else ""
+            # Allow partial match (e.g., "Bioinformatics" matches "Bioinformatics (Oxford, England)")
+            if filter_venue_lower not in paper_venue_lower:
+                continue
+
+        filtered.append(paper)
+
+    return filtered
+
+
+async def run_pipeline_async(
+    query: str,
+    sources: list[str],
+    top_n: int,
+    max_per_source: int,
+    prefilter_k: int,
+    settings: "Settings",
+    verbose: bool = False,
+    quiet: bool = False,
+    show_all: bool = False,
+    # Filter overrides (CLI takes priority over LLM-extracted filters)
+    year: int | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+    venue: str | None = None,
+) -> list[EvalResult]:
+    """
+    Async entrypoint for the full paper search pipeline.
+
+    Use this from async code (e.g. `paper topics`) to avoid nested `asyncio.run()`.
+    """
+    return await _run_pipeline_async(
+        query=query,
+        sources=sources,
+        top_n=top_n,
+        max_per_source=max_per_source,
+        prefilter_k=prefilter_k,
+        settings=settings,
+        verbose=verbose,
+        quiet=quiet,
+        show_all=show_all,
+        year=year,
+        year_min=year_min,
+        year_max=year_max,
+        venue=venue,
+    )
+
+
 def run_pipeline(
     query: str,
     sources: list[str],
@@ -26,6 +118,11 @@ def run_pipeline(
     verbose: bool = False,
     quiet: bool = False,
     show_all: bool = False,
+    # Filter overrides (CLI takes priority over LLM-extracted filters)
+    year: int | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+    venue: str | None = None,
 ) -> list[EvalResult]:
     """
     Run the full paper search pipeline.
@@ -34,12 +131,13 @@ def run_pipeline(
     1. LLM intent extraction / query rewriting
     2. Multi-source search
     3. Normalize and deduplicate
-    4. Coarse ranking to prefilter_k
-    5. LLM reranking with evidence extraction (skipped if show_all=True)
-    6. Return top_n results (or all if show_all=True)
+    4. Apply year/venue filters (post-filtering for sources that don't support native filtering)
+    5. Coarse ranking to prefilter_k
+    6. LLM reranking with evidence extraction (skipped if show_all=True)
+    7. Return top_n results (or all if show_all=True)
     """
     return asyncio.run(
-        _run_pipeline_async(
+        run_pipeline_async(
             query=query,
             sources=sources,
             top_n=top_n,
@@ -49,6 +147,10 @@ def run_pipeline(
             verbose=verbose,
             quiet=quiet,
             show_all=show_all,
+            year=year,
+            year_min=year_min,
+            year_max=year_max,
+            venue=venue,
         )
     )
 
@@ -117,6 +219,26 @@ def _display_intent_analysis(intent: QueryIntent, show_progress: bool) -> None:
         content.append(", ".join(intent.exclude_terms), style="red")
         content.append("\n")
 
+    # Year filter
+    if intent.year:
+        content.append("📅 ", style="bold")
+        content.append("Year: ", style="bold cyan")
+        content.append(str(intent.year), style="cyan")
+        content.append("\n")
+    elif intent.year_min or intent.year_max:
+        content.append("📅 ", style="bold")
+        content.append("Year Range: ", style="bold cyan")
+        year_range = f"{intent.year_min or '...'} - {intent.year_max or '...'}"
+        content.append(year_range, style="cyan")
+        content.append("\n")
+
+    # Venue filter
+    if intent.venue:
+        content.append("📖 ", style="bold")
+        content.append("Journal: ", style="bold green")
+        content.append(intent.venue, style="green")
+        content.append("\n")
+
     # Create panel
     panel = Panel(
         content,
@@ -139,6 +261,11 @@ async def _run_pipeline_async(
     verbose: bool = False,
     quiet: bool = False,
     show_all: bool = False,
+    # Filter overrides
+    year: int | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+    venue: str | None = None,
 ) -> list[EvalResult]:
     """Async implementation of the pipeline."""
     from papercli.cache import Cache
@@ -164,8 +291,19 @@ async def _run_pipeline_async(
                 disable=not show_progress,
                 transient=True,
             ) as progress:
-                task = progress.add_task("[cyan]Step 1/5: Analyzing query intent...", total=None)
+                task = progress.add_task("[cyan]Step 1/6: Analyzing query intent...", total=None)
                 intent = await extract_intent(query, llm, cache)
+
+                # Apply CLI overrides to intent (CLI takes priority)
+                if year is not None:
+                    intent.year = year
+                if year_min is not None:
+                    intent.year_min = year_min
+                if year_max is not None:
+                    intent.year_max = year_max
+                if venue is not None:
+                    intent.venue = venue
+
                 progress.update(task, description="[green]✓ Query analyzed")
         except LLMError as e:
             # Display actionable error message
@@ -207,11 +345,11 @@ async def _run_pipeline_async(
             disable=not show_progress,
             transient=True,
         ) as progress:
-            # Main task for remaining progress (steps 2-5)
+            # Main task for remaining progress (steps 2-6)
             main_task = progress.add_task("[cyan]Searching...", total=100)
 
             # Step 2: Multi-source search (0% -> 50%)
-            progress.update(main_task, description=f"[cyan]Step 2/5: Searching {len(sources)} sources...")
+            progress.update(main_task, description=f"[cyan]Step 2/6: Searching {len(sources)} sources...")
             papers = await _search_all_sources(sources, intent, max_per_source, cache, settings, verbose, progress)
             progress.update(main_task, completed=50)
 
@@ -224,29 +362,45 @@ async def _run_pipeline_async(
             if verbose:
                 console.print(f"  [dim]→ Found {len(papers)} papers from all sources[/dim]")
 
-            # Step 3: Deduplicate (50% -> 60%)
-            progress.update(main_task, description="[cyan]Step 3/5: Removing duplicates...")
+            # Step 3: Deduplicate (50% -> 55%)
+            progress.update(main_task, description="[cyan]Step 3/6: Removing duplicates...")
             original_count = len(papers)
             papers = deduplicate(papers)
-            progress.update(main_task, completed=60)
+            progress.update(main_task, completed=55)
 
             if verbose:
                 removed = original_count - len(papers)
                 console.print(f"  [dim]→ Removed {removed} duplicates, {len(papers)} unique papers[/dim]")
 
-            # Step 4: Coarse ranking (60% -> 70%)
-            progress.update(main_task, description="[cyan]Step 4/5: Ranking candidates...")
+            # Step 4: Apply filters (55% -> 65%)
+            progress.update(main_task, description="[cyan]Step 4/6: Applying filters...")
+            pre_filter_count = len(papers)
+            papers = apply_filters(papers, intent)
+            progress.update(main_task, completed=65)
+
+            if verbose and pre_filter_count != len(papers):
+                filtered_out = pre_filter_count - len(papers)
+                console.print(f"  [dim]→ Filtered out {filtered_out} papers (year/venue), {len(papers)} remain[/dim]")
+
+            if not papers:
+                progress.update(main_task, completed=100, description="[yellow]No papers after filtering")
+                if show_progress:
+                    console.print("[yellow]No papers match the year/venue filters.[/yellow]")
+                return []
+
+            # Step 5: Coarse ranking (65% -> 75%)
+            progress.update(main_task, description="[cyan]Step 5/6: Ranking candidates...")
             # When show_all, rank all papers but don't limit to prefilter_k
             rank_k = len(papers) if show_all else prefilter_k
             candidates = coarse_rank(papers, intent, k=rank_k)
-            progress.update(main_task, completed=70)
+            progress.update(main_task, completed=75)
 
             if verbose:
                 console.print(f"  [dim]→ Selected top {len(candidates)} candidates for evaluation[/dim]")
 
             if show_all:
                 # Skip LLM reranking - convert papers to EvalResult with placeholder values
-                progress.update(main_task, description="[cyan]Step 5/5: Preparing all results...")
+                progress.update(main_task, description="[cyan]Step 6/6: Preparing all results...")
                 results = [
                     EvalResult(
                         paper=paper,
@@ -261,22 +415,22 @@ async def _run_pipeline_async(
                 progress.update(main_task, completed=95)
                 final_results = results  # Return all
             else:
-                # Step 5: LLM reranking (70% -> 95%)
+                # Step 6: LLM reranking (75% -> 95%)
                 progress.update(
                     main_task,
-                    description=f"[cyan]Step 5/5: Evaluating {len(candidates)} papers with LLM..."
+                    description=f"[cyan]Step 6/6: Evaluating {len(candidates)} papers with LLM..."
                 )
                 results = await rerank_with_llm(
                     query, candidates, llm, cache,
                     progress_callback=lambda i, total: progress.update(
                         main_task,
-                        completed=70 + int(25 * i / total),
-                        description=f"[cyan]Step 5/5: Evaluating paper {i}/{total}..."
+                        completed=75 + int(20 * i / total),
+                        description=f"[cyan]Step 6/6: Evaluating paper {i}/{total}..."
                     )
                 )
                 progress.update(main_task, completed=95)
 
-                # Step 6: Return top_n (100%)
+                # Return top_n
                 results = sorted(results, key=lambda r: r.score, reverse=True)
                 final_results = results[:top_n]
 
