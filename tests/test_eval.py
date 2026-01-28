@@ -47,7 +47,8 @@ async def test_exception_preserves_correct_paper_index():
                 )
         raise ValueError("Unknown paper")
     
-    mock_llm.eval_completion = AsyncMock(side_effect=mock_eval_completion)
+    # Implementation calls llm.instinct_completion (async), so mock that API.
+    mock_llm.instinct_completion = AsyncMock(side_effect=mock_eval_completion)
     
     results = await rerank_with_llm(
         query="test",
@@ -103,7 +104,8 @@ async def test_all_results_match_correct_papers():
                 )
         raise ValueError("Paper not found")
     
-    mock_llm.eval_completion = AsyncMock(side_effect=mock_eval_completion)
+    # Implementation calls llm.instinct_completion (async), so mock that API.
+    mock_llm.instinct_completion = AsyncMock(side_effect=mock_eval_completion)
     
     results = await rerank_with_llm(
         query="test",
