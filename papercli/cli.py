@@ -498,6 +498,26 @@ def pubmed_dump(
         int,
         typer.Option("--batch-size", help="PubMed esearch batch size"),
     ] = 500,
+    sleep_seconds: Annotated[
+        float,
+        typer.Option("--sleep", help="Sleep seconds between batches"),
+    ] = 0.5,
+    max_retries: Annotated[
+        int,
+        typer.Option("--max-retries", help="Max retries for PubMed requests"),
+    ] = 3,
+    backoff_initial: Annotated[
+        float,
+        typer.Option("--backoff-initial", help="Initial backoff seconds"),
+    ] = 1.0,
+    backoff_base: Annotated[
+        float,
+        typer.Option("--backoff-base", help="Backoff multiplier"),
+    ] = 1.8,
+    backoff_max: Annotated[
+        float,
+        typer.Option("--backoff-max", help="Max backoff seconds"),
+    ] = 10.0,
     max_results: Annotated[
         Optional[int],
         typer.Option("--max-results", help="Maximum number of papers to return"),
@@ -510,6 +530,10 @@ def pubmed_dump(
         Optional[str],
         typer.Option("--out", help="Write output to a file path"),
     ] = None,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume/--no-resume", help="Resume from existing jsonl output"),
+    ] = True,
     cache_path: Annotated[
         Optional[str],
         typer.Option("--cache-path", help="Path to SQLite cache file"),
@@ -550,6 +574,12 @@ def pubmed_dump(
     if batch_size <= 0:
         console.print("[red]Error:[/red] --batch-size must be a positive integer.")
         raise typer.Exit(1)
+    if sleep_seconds < 0:
+        console.print("[red]Error:[/red] --sleep must be >= 0.")
+        raise typer.Exit(1)
+    if max_retries < 0:
+        console.print("[red]Error:[/red] --max-retries must be >= 0.")
+        raise typer.Exit(1)
 
     settings = Settings(
         cache_path=cache_path,
@@ -575,6 +605,32 @@ def pubmed_dump(
     )
 
     source = PubMedSource(cache=cache, api_key=settings.api_keys.ncbi_api_key)
+
+    skip_pmids: set[str] = set()
+    initial_done = 0
+    out_path = Path(out) if out else None
+    if resume and out_path and out_path.exists():
+        if output_format != "jsonl":
+            console.print("[yellow]Warning:[/yellow] --resume only works with jsonl; ignoring resume.")
+        else:
+            try:
+                with out_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                        except Exception:
+                            continue
+                        pmid = record.get("pmid")
+                        if pmid:
+                            skip_pmids.add(str(pmid))
+                initial_done = len(skip_pmids)
+                if not quiet and initial_done:
+                    console.print(f"[cyan]Resuming: {initial_done} records already in {out_path}[/cyan]")
+            except Exception as e:
+                console.print(f"[yellow]Warning:[/yellow] Failed to read resume file: {e}")
 
     progress = None
     task_id = None
@@ -606,6 +662,13 @@ def pubmed_dump(
                 batch_size=batch_size,
                 max_results=max_results,
                 progress_cb=_progress_cb,
+                sleep_seconds=sleep_seconds,
+                max_retries=max_retries,
+                backoff_initial=backoff_initial,
+                backoff_base=backoff_base,
+                backoff_max=backoff_max,
+                skip_ids=skip_pmids,
+                initial_done=initial_done,
             )
         )
     except Exception as e:
@@ -639,7 +702,12 @@ def pubmed_dump(
     if out:
         path = Path(out)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(output_text, encoding="utf-8")
+        if resume and output_format == "jsonl" and path.exists():
+            with path.open("a", encoding="utf-8") as f:
+                for record in output_records:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        else:
+            path.write_text(output_text, encoding="utf-8")
         if not quiet:
             console.print(f"[green]Saved {len(output_records)} records to {path}[/green]")
     else:

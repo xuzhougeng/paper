@@ -1,5 +1,6 @@
 """PubMed search adapter using NCBI E-utilities."""
 
+import asyncio
 import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING, Optional, Callable
 from urllib.parse import quote
@@ -101,11 +102,24 @@ class PubMedSource(BaseSource):
         batch_size: int = 500,
         max_results: Optional[int] = None,
         progress_cb: Optional[Callable[[int, Optional[int]], None]] = None,
+        sleep_seconds: float = 0.0,
+        max_retries: int = 3,
+        backoff_initial: float = 1.0,
+        backoff_base: float = 1.8,
+        backoff_max: float = 10.0,
+        skip_ids: Optional[set[str]] = None,
+        initial_done: int = 0,
     ) -> list[Paper]:
         """Search PubMed and retrieve all results using pagination."""
         fetch_chunk_size = 200
         query = self._build_query(intent)
         if not query:
+            return []
+        if max_results is not None and max_results <= 0:
+            return []
+        skip_ids = skip_ids or set()
+        done = max(0, initial_done)
+        if max_results is not None and done >= max_results:
             return []
 
         year_filter = self._get_year_filter_key(intent)
@@ -119,9 +133,11 @@ class PubMedSource(BaseSource):
                 else:
                     papers = cached
                     total_cached = len(papers)
+                if skip_ids:
+                    papers = [p for p in papers if p.get("source_id") not in skip_ids]
                 if progress_cb:
                     total_value = total_cached if total_cached is not None else len(papers)
-                    progress_cb(0, total_value)
+                    progress_cb(done, total_value)
                     progress_cb(len(papers), total_value)
                 return [Paper.model_validate(p) for p in papers]
 
@@ -129,38 +145,77 @@ class PubMedSource(BaseSource):
         async with httpx.AsyncClient(timeout=30.0) as client:
             retstart = 0
             total = None
-            done = 0
             while True:
-                pmids, count = await self._esearch_with_count(
-                    client, query, batch_size, retstart, intent
-                )
+                try:
+                    pmids, count = await _with_retries(
+                        self._esearch_with_count,
+                        client,
+                        query,
+                        batch_size,
+                        retstart,
+                        intent,
+                        max_retries=max_retries,
+                        backoff_initial=backoff_initial,
+                        backoff_base=backoff_base,
+                        backoff_max=backoff_max,
+                    )
+                except Exception:
+                    retstart += batch_size
+                    if sleep_seconds > 0:
+                        await asyncio.sleep(sleep_seconds)
+                    continue
                 if total is None:
                     total = count
                     if max_results is not None:
                         total = min(total, max_results)
                     if progress_cb:
-                        progress_cb(0, total)
+                        progress_cb(done, total)
                 if not pmids:
                     break
+                if skip_ids:
+                    pmids = [p for p in pmids if p not in skip_ids]
+                if not pmids:
+                    retstart += batch_size
+                    if sleep_seconds > 0:
+                        await asyncio.sleep(sleep_seconds)
+                    continue
 
+                added_this_batch = 0
                 # efetch URL can be too long if we pass too many IDs
                 for i in range(0, len(pmids), fetch_chunk_size):
                     chunk = pmids[i : i + fetch_chunk_size]
-                    papers = await self._efetch(client, chunk)
+                    try:
+                        papers = await _with_retries(
+                            self._efetch,
+                            client,
+                            chunk,
+                            max_retries=max_retries,
+                            backoff_initial=backoff_initial,
+                            backoff_base=backoff_base,
+                            backoff_max=backoff_max,
+                        )
+                    except Exception:
+                        continue
                     all_papers.extend(papers)
+                    added_this_batch += len(papers)
+                    if max_results is not None and len(all_papers) >= max_results:
+                        all_papers = all_papers[:max_results]
+                        break
 
                 retstart += batch_size
-                advance = len(pmids)
-                if max_results is not None and done + advance > max_results:
-                    advance = max_results - done
-                done += advance
-                if progress_cb and advance > 0:
-                    progress_cb(advance, total)
+                if added_this_batch:
+                    advance = added_this_batch
+                    if max_results is not None and done + advance > max_results:
+                        advance = max_results - done
+                    done += max(0, advance)
+                    if progress_cb and advance > 0:
+                        progress_cb(advance, total)
                 if max_results is not None and len(all_papers) >= max_results:
-                    all_papers = all_papers[:max_results]
                     break
                 if total is not None and retstart >= total:
                     break
+                if sleep_seconds > 0:
+                    await asyncio.sleep(sleep_seconds)
 
         if self.cache and all_papers:
             await self.cache.set(
@@ -384,3 +439,25 @@ class PubMedSource(BaseSource):
             doi=doi,
             venue=venue,
         )
+
+
+async def _with_retries(
+    func,
+    *args,
+    max_retries: int,
+    backoff_initial: float,
+    backoff_base: float,
+    backoff_max: float,
+    **kwargs,
+):
+    """Retry async function with exponential backoff."""
+    attempt = 0
+    while True:
+        try:
+            return await func(*args, **kwargs)
+        except Exception:
+            attempt += 1
+            if attempt > max_retries:
+                raise
+            delay = min(backoff_max, backoff_initial * (backoff_base ** (attempt - 1)))
+            await asyncio.sleep(delay)
