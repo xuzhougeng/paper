@@ -1,7 +1,7 @@
 """PubMed search adapter using NCBI E-utilities."""
 
 import xml.etree.ElementTree as ET
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Callable
 from urllib.parse import quote
 
 import httpx
@@ -74,8 +74,9 @@ class PubMedSource(BaseSource):
         parts = []
 
         # Main query - search in title and abstract
-        main_query = intent.query_en
-        parts.append(f"({main_query}[Title/Abstract])")
+        main_query = intent.query_en.strip() if intent.query_en else ""
+        if main_query:
+            parts.append(f"({main_query}[Title/Abstract])")
 
         # Add required phrases
         for phrase in intent.required_phrases:
@@ -94,6 +95,84 @@ class PubMedSource(BaseSource):
 
         return query
 
+    async def search_all(
+        self,
+        intent: QueryIntent,
+        batch_size: int = 500,
+        max_results: Optional[int] = None,
+        progress_cb: Optional[Callable[[int, Optional[int]], None]] = None,
+    ) -> list[Paper]:
+        """Search PubMed and retrieve all results using pagination."""
+        fetch_chunk_size = 200
+        query = self._build_query(intent)
+        if not query:
+            return []
+
+        year_filter = self._get_year_filter_key(intent)
+        cache_key = f"pubmed:all:{query}:{batch_size}:{max_results}:{year_filter}"
+        if self.cache:
+            cached = await self.cache.get(cache_key)
+            if cached:
+                if isinstance(cached, dict):
+                    papers = cached.get("papers", [])
+                    total_cached = cached.get("total")
+                else:
+                    papers = cached
+                    total_cached = len(papers)
+                if progress_cb:
+                    total_value = total_cached if total_cached is not None else len(papers)
+                    progress_cb(0, total_value)
+                    progress_cb(len(papers), total_value)
+                return [Paper.model_validate(p) for p in papers]
+
+        all_papers: list[Paper] = []
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            retstart = 0
+            total = None
+            done = 0
+            while True:
+                pmids, count = await self._esearch_with_count(
+                    client, query, batch_size, retstart, intent
+                )
+                if total is None:
+                    total = count
+                    if max_results is not None:
+                        total = min(total, max_results)
+                    if progress_cb:
+                        progress_cb(0, total)
+                if not pmids:
+                    break
+
+                # efetch URL can be too long if we pass too many IDs
+                for i in range(0, len(pmids), fetch_chunk_size):
+                    chunk = pmids[i : i + fetch_chunk_size]
+                    papers = await self._efetch(client, chunk)
+                    all_papers.extend(papers)
+
+                retstart += batch_size
+                advance = len(pmids)
+                if max_results is not None and done + advance > max_results:
+                    advance = max_results - done
+                done += advance
+                if progress_cb and advance > 0:
+                    progress_cb(advance, total)
+                if max_results is not None and len(all_papers) >= max_results:
+                    all_papers = all_papers[:max_results]
+                    break
+                if total is not None and retstart >= total:
+                    break
+
+        if self.cache and all_papers:
+            await self.cache.set(
+                cache_key,
+                {
+                    "papers": [p.model_dump() for p in all_papers],
+                    "total": total,
+                },
+            )
+
+        return all_papers
+
     async def _esearch(
         self,
         client: httpx.AsyncClient,
@@ -102,6 +181,8 @@ class PubMedSource(BaseSource):
         intent: QueryIntent,
     ) -> list[str]:
         """Use esearch to get PMIDs with optional date filtering."""
+        if not query:
+            return []
         params: dict[str, str | int] = {
             "db": "pubmed",
             "term": query,
@@ -134,6 +215,53 @@ class PubMedSource(BaseSource):
 
         data = response.json()
         return data.get("esearchresult", {}).get("idlist", [])
+
+    async def _esearch_with_count(
+        self,
+        client: httpx.AsyncClient,
+        query: str,
+        retmax: int,
+        retstart: int,
+        intent: QueryIntent,
+    ) -> tuple[list[str], int]:
+        """Use esearch to get PMIDs plus total count with optional date filtering."""
+        if not query:
+            return ([], 0)
+        params: dict[str, str | int] = {
+            "db": "pubmed",
+            "term": query,
+            "retmax": retmax,
+            "retstart": retstart,
+            "retmode": "json",
+            "sort": "relevance",
+        }
+        if self.api_key:
+            params["api_key"] = self.api_key
+
+        if intent.year or intent.year_min or intent.year_max:
+            params["datetype"] = "PDAT"
+            if intent.year:
+                params["mindate"] = str(intent.year)
+                params["maxdate"] = str(intent.year)
+            else:
+                if intent.year_min:
+                    params["mindate"] = str(intent.year_min)
+                if intent.year_max:
+                    params["maxdate"] = str(intent.year_max)
+
+        url = f"{EUTILS_BASE}/esearch.fcgi"
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+
+        data = response.json()
+        result = data.get("esearchresult", {})
+        idlist = result.get("idlist", [])
+        count_raw = result.get("count", 0)
+        try:
+            count = int(count_raw)
+        except (TypeError, ValueError):
+            count = 0
+        return (idlist, count)
 
     async def _efetch(self, client: httpx.AsyncClient, pmids: list[str]) -> list[Paper]:
         """Fetch paper details using efetch."""
@@ -256,4 +384,3 @@ class PubMedSource(BaseSource):
             doi=doi,
             venue=venue,
         )
-

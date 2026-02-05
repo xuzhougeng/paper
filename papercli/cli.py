@@ -473,6 +473,180 @@ def find(
 
 
 @app.command()
+def pubmed_dump(
+    venue: Annotated[
+        str,
+        typer.Option("--venue", "-j", help="Journal name to filter (e.g., 'Bioinformatics')"),
+    ],
+    year: Annotated[
+        Optional[int],
+        typer.Option("--year", "-y", help="Filter by exact publication year (e.g., 2025)"),
+    ] = None,
+    year_min: Annotated[
+        Optional[int],
+        typer.Option("--year-min", help="Filter by minimum publication year (inclusive)"),
+    ] = None,
+    year_max: Annotated[
+        Optional[int],
+        typer.Option("--year-max", help="Filter by maximum publication year (inclusive)"),
+    ] = None,
+    query: Annotated[
+        Optional[str],
+        typer.Option("--query", help="Optional keyword query to narrow results"),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option("--batch-size", help="PubMed esearch batch size"),
+    ] = 500,
+    max_results: Annotated[
+        Optional[int],
+        typer.Option("--max-results", help="Maximum number of papers to return"),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: json or jsonl"),
+    ] = "jsonl",
+    out: Annotated[
+        Optional[str],
+        typer.Option("--out", help="Write output to a file path"),
+    ] = None,
+    cache_path: Annotated[
+        Optional[str],
+        typer.Option("--cache-path", help="Path to SQLite cache file"),
+    ] = None,
+    no_cache: Annotated[
+        bool,
+        typer.Option("--no-cache", help="Disable caching"),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress progress output"),
+    ] = False,
+) -> None:
+    """
+    Dump PubMed results for a venue and year range without LLM reranking.
+
+    Examples:
+        paper pubmed-dump --venue Bioinformatics --year-min 2020 --year-max 2025
+        paper pubmed-dump --venue Bioinformatics --year 2024 --format json --out bioinfo-2024.json
+    """
+    import asyncio
+    import json
+    from pathlib import Path
+
+    from papercli.cache import Cache
+    from papercli.config import Settings
+    from papercli.models import QueryIntent
+    from papercli.sources.pubmed import PubMedSource
+
+    if output_format not in ("json", "jsonl"):
+        console.print("[red]Error:[/red] --format must be one of: json, jsonl")
+        raise typer.Exit(1)
+
+    if year is not None and (year_min is not None or year_max is not None):
+        console.print("[red]Error:[/red] Cannot use --year with --year-min/--year-max. Use one or the other.")
+        raise typer.Exit(1)
+
+    if batch_size <= 0:
+        console.print("[red]Error:[/red] --batch-size must be a positive integer.")
+        raise typer.Exit(1)
+
+    settings = Settings(
+        cache_path=cache_path,
+        cache_enabled=not no_cache,
+    )
+
+    cache = None
+    if settings.cache_enabled:
+        cache = Cache(path=settings.cache.path, ttl_hours=settings.cache.ttl_hours)
+
+    intent = QueryIntent(
+        reasoning="Direct PubMed dump (no LLM).",
+        query_en=(query or "").strip(),
+        query_zh=None,
+        keywords=[],
+        synonyms={},
+        required_phrases=[],
+        exclude_terms=[],
+        year=year,
+        year_min=year_min,
+        year_max=year_max,
+        venue=venue,
+    )
+
+    source = PubMedSource(cache=cache, api_key=settings.api_keys.ncbi_api_key)
+
+    progress = None
+    task_id = None
+    if not quiet:
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+
+        console.print("[cyan]Fetching PubMed results...[/cyan]")
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+        )
+        progress.start()
+        task_id = progress.add_task("PubMed fetch", total=1)
+
+    def _progress_cb(delta: int, total: Optional[int]) -> None:
+        if progress is None or task_id is None:
+            return
+        if total is not None:
+            progress.update(task_id, total=total)
+        if delta:
+            progress.advance(task_id, delta)
+
+    try:
+        papers = asyncio.run(
+            source.search_all(
+                intent=intent,
+                batch_size=batch_size,
+                max_results=max_results,
+                progress_cb=_progress_cb,
+            )
+        )
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {str(e)}")
+        raise typer.Exit(1)
+    finally:
+        if progress is not None:
+            progress.stop()
+
+    output_records = [
+        {
+            "title": p.title,
+            "abstract": p.abstract,
+            "year": p.year,
+            "pmid": p.source_id,
+            "doi": p.doi,
+            "url": p.url,
+            "venue": p.venue,
+            "authors": p.authors,
+        }
+        for p in papers
+    ]
+
+    if output_format == "json":
+        output_text = json.dumps(output_records, ensure_ascii=False, indent=2)
+    else:
+        output_text = "\n".join(
+            json.dumps(record, ensure_ascii=False) for record in output_records
+        )
+
+    if out:
+        path = Path(out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(output_text, encoding="utf-8")
+        if not quiet:
+            console.print(f"[green]Saved {len(output_records)} records to {path}[/green]")
+    else:
+        console.print(output_text)
+
+
+@app.command()
 def topics(
     query: Annotated[
         Optional[str],
@@ -2675,4 +2849,3 @@ def review_lint(
 
 if __name__ == "__main__":
     app()
-

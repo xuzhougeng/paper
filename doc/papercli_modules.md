@@ -6,7 +6,7 @@
 
 ```
 papercli/
-├── __init__.py          # 包初始化，版本信息
+├── __init__.py          # 包初始化（版本信息）
 ├── cli.py               # CLI 命令行接口
 ├── config.py            # 配置管理
 ├── cache.py             # SQLite 缓存
@@ -23,13 +23,21 @@ papercli/
 ├── extract.py           # JSONL 转换工具
 ├── structure.py         # 结构化解析
 ├── pdf_fetch.py         # DOI PDF 下载 (Unpaywall/PMC)
+├── topics.py            # 论文集合的主题分析（LLM + 统计）
+├── review/              # 论文评审与文本 lint（LLM critique + 规则 lint）
+│   ├── __init__.py
+│   ├── critique.py      # LLM 结构化评审（BioPeerReview）
+│   ├── lint.py          # 确定性规则 lint（LintReport）
+│   ├── models.py        # review 数据模型
+│   └── prompts.py       # review prompts（system/user）
 └── sources/             # 数据源适配器
     ├── __init__.py
     ├── base.py          # 基类
     ├── pubmed.py        # PubMed
     ├── openalex.py      # OpenAlex
     ├── scholar.py       # Google Scholar
-    └── arxiv.py         # arXiv
+    ├── arxiv.py         # arXiv
+    └── zotero.py        # Zotero（个人文献库，可选）
 ```
 
 ---
@@ -39,9 +47,7 @@ papercli/
 ### `__init__.py`
 **功能**: 包初始化与版本管理
 
-- 定义 `__version__` 版本号
-- 作为 papercli 包的入口点
-- 导出包的公共接口
+- 定义 `__version__` 版本号（当前 `papercli/__init__.py` 仅包含版本与包 docstring）
 
 ---
 
@@ -54,12 +60,16 @@ papercli/
 
 1. **`find`** - 语义搜索学术论文
    - 解析用户查询意图
-   - 多源并行搜索 (PubMed、OpenAlex、Scholar、arXiv)
+   - 多源并行搜索 (PubMed、OpenAlex、Scholar、arXiv、Zotero*)
    - 去重与粗排
    - LLM 重排序与证据提取
    - 格式化输出
 
-2. **`cite`** - 按句生成引用报告
+2. **`topics`** - 对检索结果做主题分析（统计 + LLM）
+   - 可直接搜索，也可读取 `paper find --format json` 的输出文件
+   - 生成 Markdown 或 JSON 的主题分析结果（默认 `topics.md`）
+
+3. **`cite`** - 按句生成引用报告
    - 读取文本输入（文件、参数或 STDIN）
    - **LLM 语义分句**: 使用 LLM 根据语篇关系（因果、对比、延续等）智能拆分文本，而非简单标点分句
    - 逐句检索并为每句寻找最合适的引用
@@ -67,30 +77,39 @@ papercli/
    - 生成 Markdown 报告（默认 `report.md`）
    - **Fail-fast**: LLM 调用失败或返回无效 JSON 时直接报错退出
 
-3. **`gen-query`** - 生成平台特定搜索查询
+4. **`check`** - API/依赖健康检查
+   - 检查 LLM 与各数据源（PubMed/OpenAlex/arXiv/Scholar/Zotero）连通性与配置情况
+
+5. **`gen-query`** - 生成平台特定搜索查询
    - 为 PubMed、Google Scholar、Web of Science 等平台生成优化查询
    - 不执行实际搜索，仅生成查询字符串
 
-4. **`extract`** - PDF 转 JSONL (页面级)
+6. **`extract`** - PDF 转 JSONL (页面级)
    - 调用 Doc2X API 解析 PDF
    - 输出页面级别的 JSONL 文件
    - 支持进度回调和详细日志
 
-5. **`structure`** - JSONL 结构化解析 (二次解析)
+7. **`structure`** - JSONL 结构化解析 (二次解析)
    - 将页面级 JSONL 转换为数据库友好的结构化 JSON
    - 提取 title、abstract、methods、results、references 等字段
    - 分离主图表与补充图表
 
-6. **`fetch-pdf`** - 基于 DOI 下载 PDF
+8. **`fetch-pdf`** - 基于 DOI 下载 PDF
    - 通过 Unpaywall API 查找开放获取 PDF
    - PMC 作为备选数据源 (DOI → PMID → PMCID → PDF)
    - 支持仅查询 URL 或直接下载
 
-7. **`slide`** - 生成文章亮点总结 Slide
+9. **`slide`** - 生成文章亮点总结 Slide
    - 读取文本输入（文件或 STDIN）
    - 使用 Gemini 提取关键亮点（标题、要点、结论）
    - 生成单页 16:9 PNG 图片
    - 支持多种视觉风格：手绘风 (handdrawn)、极简 (minimal)、学术 (academic)、深色科技 (dark)、多彩 (colorful)
+
+10. **`review`** - 论文评审与文本 lint（命令组）
+   - **`paper review critique`**: 使用 LLM 生成结构化的生物/生医论文 peer review（输出 `review.md` 或 JSON）
+   - **`paper review lint`**: 对文本运行确定性规则检查并生成 lint 报告（输出 `lint.md` 或 JSON）
+
+> 注：`Zotero` 数据源为可选项，需要配置 `ZOTERO_API_KEY` 与 `ZOTERO_USER_ID`（或配置文件 `[zotero]` 段）后才会启用检索。
 
 #### 辅助功能
 - 丰富的命令行参数 (verbose、quiet、format、output 等)
@@ -167,9 +186,27 @@ papercli/
    - `timeout`: 请求超时 (默认 120 秒)
    - `max_retries`: 最大重试次数 (默认 3)
 
+7. **`ZoteroConfig`** - Zotero API 配置（个人文献库检索）
+   - `base_url`: API 地址 (默认 `https://api.zotero.org`)
+   - `api_key`: Zotero API Key（也可用环境变量 `ZOTERO_API_KEY`）
+   - `user_id`: Zotero User ID（也可用环境变量 `ZOTERO_USER_ID`）
+   - `qmode`: 查询模式（默认 `titleCreatorYear`）
+   - `item_type`: itemType 过滤（默认 `-attachment`，排除附件）
+   - `timeout`: HTTP 超时
+
 #### 配置加载
-- 支持从 `~/.config/papercli.toml` 或 `./papercli.toml` 加载
-- 环境变量覆盖：`LLM_API_KEY`、`DOC2X_API_KEY`、`UNPAYWALL_EMAIL`、`GEMINI_API_KEY` 等
+- 支持从以下路径（按顺序）加载：
+  - `~/.papercli.toml`
+  - `~/.config/papercli/config.toml`
+  - `./papercli.toml`（当前目录）
+- 环境变量覆盖（常用）：
+  - `LLM_API_KEY`、`LLM_BASE_URL`
+  - `PAPERCLI_REASONING_MODEL`、`PAPERCLI_INSTINCT_MODEL`
+  - `SERPAPI_API_KEY`、`NCBI_API_KEY`、`OPENALEX_EMAIL`
+  - `DOC2X_API_KEY`、`DOC2X_BASE_URL`
+  - `UNPAYWALL_EMAIL`
+  - `GEMINI_API_KEY`、`GEMINI_BASE_URL`、`GEMINI_TEXT_MODEL`、`GEMINI_IMAGE_MODEL`
+  - `ZOTERO_API_KEY`、`ZOTERO_USER_ID`、`ZOTERO_BASE_URL`
 - 提供 `get_settings()` 函数获取全局配置实例
 
 ---
@@ -795,6 +832,21 @@ DOI
 
 ---
 
+#### `zotero.py`
+**功能**: Zotero（个人文献库）搜索适配器
+
+通过 [Zotero Web API](https://www.zotero.org/support/dev/web_api/v3/start) 在个人文献库中检索条目，并映射为统一的 `Paper` 模型。
+
+##### 配置要求
+- 需要 `ZOTERO_API_KEY` 与 `ZOTERO_USER_ID`（缺失时会自动跳过该数据源，不报错）
+- 也可在配置文件中使用 `[zotero]` 段配置：`api_key`、`user_id`、`qmode`、`item_type` 等
+
+##### 特性
+- 面向“个人库”场景（把你 Zotero 里的文献也作为检索来源）
+- 支持缓存（cache key 会包含过滤条件信息；实际过滤在 pipeline 中做 post-filtering）
+
+---
+
 ## 模块依赖关系
 
 ```
@@ -802,11 +854,16 @@ cli.py
   ├─ config.py (加载配置)
   ├─ llm.py (LLM 分句 - cite 命令)
   ├─ pipeline.py (执行搜索流程)
+  ├─ topics.py (topics 命令：统计 + LLM 主题分析)
   ├─ doc2x.py (PDF 解析)
   ├─ extract.py (JSONL 转换)
   ├─ structure.py (结构化解析)
   ├─ pdf_fetch.py (DOI PDF 下载)
   └─ slide.py (Slide 生成)
+
+cli.py (review 子命令组)
+  ├─ review/critique.py (LLM 结构化评审)
+  └─ review/lint.py (确定性 lint 规则)
 
 pipeline.py
   ├─ query.py (意图提取)
@@ -879,22 +936,37 @@ pdf_fetch.py
 paper find "CRISPR gene editing in cancer therapy" --top-n 5
 ```
 
-### 2. 生成平台查询
+### 2. 主题分析（topics）
+```bash
+# 直接搜索并输出主题分析
+paper topics "single-cell RNA-seq batch correction" --out topics.md
+
+# 读取 find 的 JSON 输出再分析
+paper find "RNA-seq" --show-all --format json > papers.json && paper topics --in papers.json --out topics.md
+```
+
+### 3. 检查配置与连通性（check）
+```bash
+paper check
+paper check --sources pubmed,openalex,arxiv,zotero
+```
+
+### 4. 生成平台查询
 ```bash
 paper gen-query "machine learning in genomics" --platform pubmed
 ```
 
-### 3. PDF 转 JSONL
+### 5. PDF 转 JSONL
 ```bash
 paper extract paper.pdf --out result.jsonl
 ```
 
-### 4. 结构化解析
+### 6. 结构化解析
 ```bash
 paper structure result.jsonl --out structured.json
 ```
 
-### 5. 基于 DOI 下载 PDF
+### 7. 基于 DOI 下载 PDF
 ```bash
 # 下载 PDF 到当前目录
 paper fetch-pdf 10.1038/nature12373
@@ -906,7 +978,7 @@ paper fetch-pdf "10.1038/s41586-023-06291-2" --out-dir ./pdfs --filename paper.p
 paper fetch-pdf 10.1000/xyz123 --no-download --format json
 ```
 
-### 6. 生成文章亮点 Slide
+### 8. 生成文章亮点 Slide
 ```bash
 # 从文件生成手绘风格 Slide
 paper slide --in article.txt --style handdrawn --out slide.png
@@ -921,11 +993,20 @@ paper slide --in text.txt --bullets 3 --image-size 2K --style academic
 paper slide --in article.txt --style dark --show-highlights
 ```
 
+### 9. 论文评审与文本 lint（review）
+```bash
+# 结构化 peer review（LLM）
+paper review critique --in manuscript.md --out review.md
+
+# 确定性规则 lint
+paper review lint --in manuscript.md --out lint.md
+```
+
 ---
 
 ## 配置文件示例
 
-`~/.config/papercli.toml`:
+推荐使用 `~/.papercli.toml`（也支持 `~/.config/papercli/config.toml` 或当前目录 `./papercli.toml`）：
 
 ```toml
 [llm]
@@ -955,6 +1036,12 @@ base_url = "https://api.openai-proxy.org/google/v1beta"  # 或官方 API
 api_key = "..."
 text_model = "gemini-3-flash-preview"      # 用于亮点提取
 image_model = "gemini-3-pro-image-preview"  # 用于 Slide 图片生成
+
+[zotero]
+api_key = "..."
+user_id = "..."
+qmode = "titleCreatorYear"
+item_type = "-attachment"
 ```
 
 ---
